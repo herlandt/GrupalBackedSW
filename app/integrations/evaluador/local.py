@@ -5,6 +5,8 @@ backend, sin servicio HTTP aparte: se despliega junto con el backend. Es la piez
 DECIDE el nivel a partir de las features que entregan los extractores.
 """
 
+import anyio
+
 from app.integrations.evaluador.port import (
     DefensaFeatures,
     EvaluacionDefensaDTO,
@@ -23,7 +25,9 @@ class LocalEvaluadorService(EvaluadorServicePort):
             "ritmo_ppm": features.ritmo_ppm,
             "pausas_largas_por_min": features.pausas_largas_por_min,
         }
-        r = predictor.predecir("defensa", valores)
+        # predict_proba de RandomForest es síncrono y bloqueante: a un hilo para no
+        # congelar el event loop (igual que la ruta 'documento' en analysis/aws.py).
+        r = await anyio.to_thread.run_sync(predictor.predecir, "defensa", valores)
         return EvaluacionDefensaDTO(
             nivel=str(r["nivel"]),
             confianza=float(r["confianza"]),

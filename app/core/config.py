@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     aws_region: str = "us-east-2"
     s3_documents_bucket: str | None = None
     s3_video_bucket: str | None = None
+    textract_bucket: str | None = None  # bucket para OCR de PDFs escaneados (Textract async)
     ses_sender_email: str | None = None
     # Extractor del análisis documental: "stub" (dev, sin AWS) | "aws" (Comprehend + Titan).
     analysis_backend: str = "stub"

@@ -66,8 +66,10 @@ async def audio_streaming(websocket: WebSocket, sesion_id: int) -> None:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
 
-    # Cola que desacopla la recepción del WS del envío a Transcribe.
-    cola: asyncio.Queue[bytes | None] = asyncio.Queue()
+    # Cola que desacopla la recepción del WS del envío a Transcribe. ACOTADA: si Transcribe
+    # se atrasa, `put` espera (backpressure) en vez de acumular audio en RAM sin límite
+    # (~200 chunks ≈ varios segundos de buffer; suficiente para un hipo de red).
+    cola: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=200)
     recibidos = {"chunks": 0, "bytes": 0}
 
     async def receptor() -> None:

@@ -13,9 +13,9 @@ import asyncio
 import logging
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable
-from time import monotonic
 from typing import Any
 
+import anyio
 from amazon_transcribe.auth import StaticCredentialResolver
 from amazon_transcribe.client import TranscribeStreamingClient
 from amazon_transcribe.handlers import TranscriptResultStreamHandler
@@ -94,12 +94,12 @@ class _ColectorTranscripcion(TranscriptResultStreamHandler):
     entre palabras consecutivas (RF-05).
     """
 
-    def __init__(self, output_stream: Any, on_segmento: OnSegmento, inicio: float) -> None:
+    def __init__(self, output_stream: Any, on_segmento: OnSegmento) -> None:
         super().__init__(output_stream)
         self._on_segmento = on_segmento
-        self._inicio = inicio
         self._palabras_total = 0
         self._consumidos: dict[str, int] = {}  # result_id -> nº de items ya procesados
+        self._primer_inicio: float | None = None  # start_time de la primera palabra (s)
         self._ultimo_fin: float | None = None  # end_time de la última palabra (s)
 
     async def handle_transcript_event(self, transcript_event: TranscriptEvent) -> None:
@@ -134,6 +134,8 @@ class _ColectorTranscripcion(TranscriptResultStreamHandler):
                     partes.append(item.content)
                 if item.item_type != "pronunciation":
                     continue
+                if self._primer_inicio is None and item.start_time is not None:
+                    self._primer_inicio = item.start_time
                 if (
                     self._ultimo_fin is not None
                     and item.start_time is not None
@@ -147,8 +149,13 @@ class _ColectorTranscripcion(TranscriptResultStreamHandler):
             if not nuevo:
                 continue
             self._palabras_total += _contar_palabras(nuevo)
-            transcurrido_min = max(monotonic() - self._inicio, 1.0) / 60.0
-            wpm = int(self._palabras_total / transcurrido_min)
+            # Ritmo sobre el TIEMPO DE AUDIO hablado (no el reloj de pared): el lag de red o
+            # los silencios de arranque/cierre no deben distorsionar el wpm (RF-05).
+            if self._primer_inicio is not None and self._ultimo_fin is not None:
+                span_s = max(self._ultimo_fin - self._primer_inicio, 1.0)
+            else:
+                span_s = 1.0
+            wpm = int(self._palabras_total / (span_s / 60.0))
             muletillas = contar_muletillas(nuevo)
             logger.info(
                 "Transcribe segmento: '%s' (muletillas=%d, wpm=%d, pausas=%d)",
@@ -180,8 +187,10 @@ async def transcribir_en_vivo(audio: AsyncIterator[bytes], *, on_segmento: OnSeg
     por cada frase reconocida con su conteo de muletillas y el ritmo (wpm) acumulado.
     Cualquier fallo de AWS se traduce a `BiometricServiceError`.
     """
+    # Resolver credenciales puede hacer I/O (lee ~/.aws / refresca STS): a un hilo.
+    resolver = await anyio.to_thread.run_sync(_resolver_credenciales)
     client = TranscribeStreamingClient(
-        region=settings.aws_region, credential_resolver=_resolver_credenciales()
+        region=settings.aws_region, credential_resolver=resolver
     )
     try:
         stream = await client.start_stream_transcription(
@@ -201,7 +210,7 @@ async def transcribir_en_vivo(audio: AsyncIterator[bytes], *, on_segmento: OnSeg
             await stream.input_stream.send_audio_event(audio_chunk=fragmento)
         await stream.input_stream.end_stream()
 
-    colector = _ColectorTranscripcion(stream.output_stream, on_segmento, monotonic())
+    colector = _ColectorTranscripcion(stream.output_stream, on_segmento)
     try:
         await asyncio.gather(_enviar_audio(), colector.handle_events())
     except BiometricServiceError:

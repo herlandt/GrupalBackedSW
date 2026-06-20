@@ -20,12 +20,15 @@ from app.modules.simulador.biometrico.schemas import (
     SegmentoIn,
 )
 from app.modules.simulador.biometrico.service import BiometricoService
+from app.modules.simulador.biometrico.video_ws import video_streaming
 
 router = APIRouter(prefix="/biometrico", tags=["biometrico"])
 
-# RF-05 (audio en vivo): WebSocket de Transcribe Streaming. La autenticación viaja como
-# ?token=<JWT> porque el handshake WebSocket del navegador no admite cabeceras.
+# Análisis EN VIVO por WebSocket (auth como ?token=<JWT>, pues el handshake del navegador
+# no admite cabeceras): audio → Transcribe Streaming (RF-05); video → Rekognition por frame
+# (RF-04). La IA evaluadora decide al final con las métricas agregadas.
 router.add_api_websocket_route("/sesiones/{sesion_id}/audio", audio_streaming)
+router.add_api_websocket_route("/sesiones/{sesion_id}/video", video_streaming)
 
 
 def get_biometrico_service(

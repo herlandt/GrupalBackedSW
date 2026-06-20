@@ -8,8 +8,10 @@ evaluadora decide.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+from collections import Counter
 from typing import Any
 
 import numpy as np
@@ -51,19 +53,32 @@ class DocumentoFeatures:
     def __init__(self, comprehend: Any, bedrock: Any) -> None:
         self.comprehend = comprehend
         self.bedrock = bedrock
+        self._cache_embed: dict[str, list[float] | None] = {}
 
     def _embed(self, texto: str) -> list[float] | None:
-        """Embedding de Titan (Bedrock). Devuelve None si Bedrock no está disponible."""
-        if self.bedrock is None or not texto.strip():
+        """Embedding de Titan (Bedrock), CACHEADO por texto: cada sección se embebe una sola
+        vez → menos llamadas y menos throttling. None si Bedrock no está disponible."""
+        limpio = texto.strip()
+        if not limpio:
             return None
-        try:
-            resp = self.bedrock.invoke_model(
-                modelId=settings.bedrock_embeddings_model,
-                body=json.dumps({"inputText": texto[:8000]}),
-            )
-            return list(json.loads(resp["body"].read())["embedding"])
-        except Exception:  # Bedrock no habilitado / error de red -> fallback léxico
-            return None
+        # Clave = hash del texto COMPLETO (no un prefijo de 8000 car.): dos secciones que
+        # compartan el inicio no deben devolver el embedding equivocado. A Titan se le manda
+        # el texto truncado (su límite de tokens), pero la caché distingue por contenido real.
+        clave = hashlib.sha256(limpio.encode("utf-8")).hexdigest()
+        if clave in self._cache_embed:
+            return self._cache_embed[clave]
+        emb: list[float] | None = None
+        if self.bedrock is not None:
+            try:
+                resp = self.bedrock.invoke_model(
+                    modelId=settings.bedrock_embeddings_model,
+                    body=json.dumps({"inputText": limpio[:8000]}),
+                )
+                emb = list(json.loads(resp["body"].read())["embedding"])
+            except Exception:  # Bedrock no habilitado / throttling / red -> fallback léxico
+                emb = None
+        self._cache_embed[clave] = emb
+        return emb
 
     def _similitud(self, a: str, b: str) -> float:
         ea, eb = self._embed(a), self._embed(b)
@@ -83,6 +98,22 @@ class DocumentoFeatures:
                 total += len(trozo.split()) // 20
         return total
 
+    def temas_clave(self, texto: str, n: int = 6) -> list[str]:
+        """Frases clave más frecuentes (Comprehend) para el feedback de 'temas detectados'."""
+        if self.comprehend is None:
+            return []
+        conteo: Counter[str] = Counter()
+        for trozo in trozos(texto)[:4]:
+            try:
+                r = self.comprehend.detect_key_phrases(Text=trozo, LanguageCode="es")
+            except Exception:
+                continue
+            for kp in r["KeyPhrases"]:
+                tema = kp["Text"].strip().lower()
+                if len(tema) > 3:
+                    conteo[tema] += 1
+        return [tema for tema, _ in conteo.most_common(n)]
+
     def calcular(self, texto: str) -> dict[str, float]:
         secciones = particionar(texto)
         presentes = [s for s in SECCIONES_ESPERADAS if s in secciones]
@@ -100,14 +131,10 @@ class DocumentoFeatures:
         completitud = len(presentes) / len(SECCIONES_ESPERADAS)
 
         palabras = texto.split()
-        # Segmenta oraciones ignorando puntos de decimales (5.8) e iniciales/siglas (U.N.A.M.):
-        # solo cuenta fin de oración ante puntuación + espacio + mayúscula real.
-        oraciones = [
-            o
-            for o in re.split(r"(?<!\d)(?<![A-ZÁÉÍÓÚ])[.!?]+(?=\s+[A-ZÁÉÍÓÚ¿¡])", texto)
-            if o.strip()
-        ]
-        long_media = len(palabras) / len(oraciones) if oraciones else 0.0
+        # Cuenta fin de oración ignorando decimales (5.8) e iniciales/siglas (U.N.A.M., A.).
+        # NO exige mayúscula después: el texto de PDF suele traer saltos de línea, no espacios.
+        n_oraciones = len(re.findall(r"(?<!\d)(?<![A-ZÁÉÍÓÚ])[.!?]+", texto))
+        long_media = len(palabras) / n_oraciones if n_oraciones else 0.0
         formalidad = max(0.0, 1.0 - abs(long_media - 22.0) / 22.0)  # ~22 palabras/oración ideal
 
         intro = f"{secciones.get('introduccion', '')} {secciones.get('problema', '')}"

@@ -8,7 +8,9 @@
 
 from __future__ import annotations
 
-from app.integrations.aws.session import get_boto_session
+import anyio
+
+from app.integrations.aws.session import get_aws_client
 from app.integrations.biometric.port import BiometricServiceError, SegmentoMetricasDTO
 
 
@@ -23,23 +25,30 @@ class AwsBiometricService:
         )
 
     async def analizar_imagen(self, *, imagen: bytes) -> SegmentoMetricasDTO:
+        # Rekognition es boto3 SÍNCRONO y bloqueante; lo movemos a un hilo para no congelar
+        # el event loop (el WS de video lo llama por cada frame, junto al WS de audio).
+        return await anyio.to_thread.run_sync(self._analizar_imagen, imagen)
+
+    def _analizar_imagen(self, imagen: bytes) -> SegmentoMetricasDTO:
         try:
-            rekognition = get_boto_session().client("rekognition")
+            rekognition = get_aws_client("rekognition")
             resp = rekognition.detect_faces(Image={"Bytes": imagen}, Attributes=["ALL"])
-        except Exception as exc:  # red / credenciales / imagen inválida
+            caras = resp.get("FaceDetails", [])
+            if not caras:  # no se detectó rostro
+                return SegmentoMetricasDTO(
+                    postura_score=0.0, contacto_visual_pct=0.0, muletillas_conteo=0, ritmo_wpm=None
+                )
+            # `dict.get(k, 0.0)` no protege si la clave EXISTE con valor None: Rekognition puede
+            # devolver `Yaw: null`; `float(None)` reventaría el frame. El `or 0.0` lo cubre.
+            pose = caras[0].get("Pose") or {}
+            yaw = abs(float(pose.get("Yaw") or 0.0))
+            pitch = abs(float(pose.get("Pitch") or 0.0))
+            roll = abs(float(pose.get("Roll") or 0.0))
+            ojos_abiertos = bool((caras[0].get("EyesOpen") or {}).get("Value", True))
+        except BiometricServiceError:
+            raise
+        except Exception as exc:  # red / credenciales / imagen inválida / respuesta inesperada
             raise BiometricServiceError(f"Rekognition falló: {exc}") from exc
-
-        caras = resp.get("FaceDetails", [])
-        if not caras:  # no se detectó rostro
-            return SegmentoMetricasDTO(
-                postura_score=0.0, contacto_visual_pct=0.0, muletillas_conteo=0, ritmo_wpm=None
-            )
-
-        pose = caras[0].get("Pose", {})
-        yaw = abs(float(pose.get("Yaw", 0.0)))
-        pitch = abs(float(pose.get("Pitch", 0.0)))
-        roll = abs(float(pose.get("Roll", 0.0)))
-        ojos_abiertos = bool(caras[0].get("EyesOpen", {}).get("Value", True))
 
         postura = max(0.0, 100.0 - (pitch + roll))  # cabeza erguida
         contacto = max(0.0, 100.0 - yaw * 2.0)  # mirando a la cámara

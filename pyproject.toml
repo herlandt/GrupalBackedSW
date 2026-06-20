@@ -1,0 +1,82 @@
+[project]
+name = "grupal-backed-sw"
+version = "0.1.0"
+description = "Backend de TesisGuard — core orquestador (FastAPI)"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic-settings",
+    "sqlalchemy[asyncio]>=2.0",
+    "psycopg[binary]>=3.2",
+    "alembic>=1.13",
+    "pwdlib[argon2]>=0.2",
+    "pyjwt>=2.9",
+    "boto3>=1.35",
+    "python-multipart>=0.0.9",
+    "email-validator>=2.2",
+    "stripe>=11",
+    "reportlab>=4.2",
+    "openpyxl>=3.1",
+    "scikit-learn>=1.5",
+    "joblib>=1.4",
+    "pandas>=2.2",
+    "numpy>=2.1",
+    "python-docx>=1.1",
+    "pypdf>=4.0",
+    "amazon-transcribe>=0.6",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "pytest-asyncio>=0.24",
+    "httpx",
+    "ruff",
+    "mypy>=1.11",
+    "pre-commit>=3.8",
+    "boto3-stubs[s3,ses,sqs]",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = ["boto3.*", "botocore.*", "stripe.*", "reportlab.*", "openpyxl.*", "sklearn.*", "joblib.*", "pandas.*", "docx.*", "pypdf.*", "amazon_transcribe.*"]
+ignore_missing_imports = true
+
+# Scripts de entrenamiento (tooling offline con pandas/sklearn): no se despliegan ni
+# se chequean con mypy estricto; el código de inferencia (app/ml/predictor.py) sí.
+[[tool.mypy.overrides]]
+module = ["app.ml.training.*"]
+ignore_errors = true
+
+# El SDK de Stripe trae tipos parciales (algunas funciones sin tipar); permitimos
+# llamarlas en el adaptador sin que mypy estricto lo marque.
+[[tool.mypy.overrides]]
+module = ["app.integrations.payments.stripe_gateway"]
+disallow_untyped_calls = false
+
+# El SDK amazon-transcribe no trae tipos; el adaptador hereda de sus clases (Any) y
+# llama a su API sin anotar. Lo aislamos aquí para no relajar mypy en el resto.
+[[tool.mypy.overrides]]
+module = ["app.integrations.biometric.transcribe", "app.integrations.biometric.transcribe_check"]
+disallow_subclassing_any = false
+disallow_untyped_calls = false
+warn_return_any = false
+
+[tool.pytest.ini_options]
+addopts = "--cov=app --cov-report=term-missing"
+testpaths = ["tests"]
+asyncio_mode = "auto"

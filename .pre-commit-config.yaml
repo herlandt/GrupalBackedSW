@@ -1,0 +1,19 @@
+# Verificaciones de calidad antes de cada commit.
+# Instalar una vez con:  pre-commit install
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  # mypy se ejecuta con el entorno del proyecto (ve todas las dependencias).
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: mypy app
+        language: system
+        types: [python]
+        pass_filenames: false

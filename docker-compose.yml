@@ -1,0 +1,41 @@
+# Infraestructura OPCIONAL (alternativa a usar un PostgreSQL instalado localmente).
+# Pensada para quien NO tenga PostgreSQL local. Publica en el host:55432 para no
+# colisionar con instalaciones locales de PostgreSQL (que suelen ocupar 5432/5433).
+# `docker compose up -d`                  -> levanta solo PostgreSQL.
+# `docker compose --profile tools up -d`  -> levanta también pgAdmin.
+services:
+  postgres:
+    image: postgres:17
+    container_name: tesisguard-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-tesisguard}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tesisguard}
+      POSTGRES_DB: ${POSTGRES_DB:-tesisguard}
+    ports:
+      # Host 55432 -> contenedor 5432: evita colisión con PostgreSQL locales
+      # (que suelen ocupar 5432 y 5433).
+      - "55432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tesisguard}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: tesisguard-pgadmin
+    restart: unless-stopped
+    profiles: ["tools"]
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@tesisguard.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+
+volumes:
+  pgdata:

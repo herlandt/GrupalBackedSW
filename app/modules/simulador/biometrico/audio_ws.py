@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import AsyncIterator
+from typing import Any
 
 from fastapi import HTTPException, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +28,52 @@ from app.modules.administracion.usuarios.repository import UsuarioRepository
 from app.modules.simulador.biometrico.service import BiometricoService
 
 logger = logging.getLogger(__name__)
+
+# Un segmento reconocido pendiente de persistir: (transcripción, muletillas, wpm, pausas).
+_Segmento = tuple[str, int, int | None, int]
+
+
+def _encolar_fin(cola: asyncio.Queue[Any]) -> None:
+    """Mete el sentinel de fin (None) SIN bloquear nunca.
+
+    Si la cola está llena, descarta el elemento más antiguo para GARANTIZAR que el sentinel
+    entre: un `await put` bloqueante aquí podría colgarse para siempre si el consumidor ya
+    murió (cola llena, sin nadie que la drene), y sin sentinel el consumidor no terminaría.
+    """
+    try:
+        cola.put_nowait(None)
+    except asyncio.QueueFull:
+        with contextlib.suppress(asyncio.QueueEmpty):
+            cola.get_nowait()
+        with contextlib.suppress(asyncio.QueueFull):
+            cola.put_nowait(None)
+
+
+async def _cerrar(
+    websocket: WebSocket,
+    tarea_receptor: asyncio.Task[None],
+    tarea_persistidor: asyncio.Task[None],
+    segmentos: asyncio.Queue[_Segmento | None],
+) -> None:
+    """Limpieza ordenada del WS de audio (cancela tareas, drena el persistidor y cierra).
+
+    Se invoca BLINDADA con `asyncio.shield`: si el handler está siendo cancelado, esta
+    corrutina NO debe interrumpirse a medias (dejaría tareas colgando o el WS sin cerrar).
+    `gather(return_exceptions=True)` absorbe la cancelación/errores PROPIOS de las subtareas
+    (las cancelamos nosotros), sin afectar a la cancelación del handler.
+    """
+    tarea_receptor.cancel()
+    _encolar_fin(segmentos)  # sentinel para que el persistidor drene lo pendiente y salga
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(
+            asyncio.gather(tarea_receptor, tarea_persistidor, return_exceptions=True),
+            timeout=5.0,
+        )
+    if not tarea_persistidor.done():  # no terminó en 5 s (BD lenta): se cancela
+        tarea_persistidor.cancel()
+        await asyncio.gather(tarea_persistidor, return_exceptions=True)
+    with contextlib.suppress(Exception):
+        await websocket.close()
 
 
 async def _autenticar(db: AsyncSession, token: str) -> Usuario | None:
@@ -96,7 +143,7 @@ async def audio_streaming(websocket: WebSocket, sesion_id: int) -> None:
                 recibidos["chunks"],
                 recibidos["bytes"],
             )
-            await cola.put(None)  # señal de fin para el iterador de audio
+            _encolar_fin(cola)  # señal de fin para audio(), sin bloquear el cierre
 
     async def audio() -> AsyncIterator[bytes]:
         while True:
@@ -105,37 +152,62 @@ async def audio_streaming(websocket: WebSocket, sesion_id: int) -> None:
                 break
             yield fragmento
 
+    # Segmentos reconocidos pendientes de PERSISTIR. Desacopla la persistencia (DB + audit)
+    # del handler de Transcribe: si escribiéramos en BD dentro del callback, ese `await`
+    # frenaría el drenado del stream HTTP/2 de AWS (backpressure → degradación/corte). El
+    # callback solo encola (rápido); el worker `persistidor` persiste y refleja al navegador.
+    segmentos: asyncio.Queue[_Segmento | None] = asyncio.Queue(maxsize=100)
+
     async def on_segmento(
         transcripcion: str, muletillas: int, wpm: int | None, pausas: int
     ) -> None:
-        """Persiste el segmento (sesión de DB propia) y lo refleja al navegador."""
-        async with SessionLocal() as db_seg:
-            user = await UsuarioRepository(db_seg).get(usuario_id)
-            if user is None:
-                return
-            try:
-                await BiometricoService(db_seg, get_biometric_service()).registrar_audio(
-                    sesion_id,
-                    user,
-                    muletillas=muletillas,
-                    wpm=wpm,
-                    pausas=pausas,
-                    transcripcion=transcripcion,
+        """Encola el segmento SIN bloquear el handler de Transcribe (best-effort)."""
+        item: _Segmento = (transcripcion, muletillas, wpm, pausas)
+        try:
+            segmentos.put_nowait(item)
+        except asyncio.QueueFull:
+            # El persistidor se atrasó: descarta el más antiguo y prioriza lo reciente, sin
+            # frenar nunca el drenado del stream de AWS (la persistencia es best-effort).
+            with contextlib.suppress(asyncio.QueueEmpty):
+                segmentos.get_nowait()
+            with contextlib.suppress(asyncio.QueueFull):
+                segmentos.put_nowait(item)
+
+    async def persistidor() -> None:
+        """Consume la cola: persiste cada segmento (sesión propia) y lo refleja al navegador."""
+        while True:
+            item = await segmentos.get()
+            if item is None:  # señal de fin
+                break
+            transcripcion, muletillas, wpm, pausas = item
+            async with SessionLocal() as db_seg:
+                user = await UsuarioRepository(db_seg).get(usuario_id)
+                if user is None:
+                    break  # usuario eliminado: dejamos de persistir
+                try:
+                    await BiometricoService(db_seg, get_biometric_service()).registrar_audio(
+                        sesion_id,
+                        user,
+                        muletillas=muletillas,
+                        wpm=wpm,
+                        pausas=pausas,
+                        transcripcion=transcripcion,
+                    )
+                    await db_seg.commit()
+                except (ResourceNotFoundError, BusinessRuleError):
+                    break  # la sesión se cerró mientras hablaba: dejamos de persistir
+            with contextlib.suppress(Exception):
+                await websocket.send_json(
+                    {
+                        "transcripcion": transcripcion,
+                        "muletillas": muletillas,
+                        "ritmo_wpm": wpm,
+                        "pausas": pausas,
+                    }
                 )
-                await db_seg.commit()
-            except (ResourceNotFoundError, BusinessRuleError):
-                return  # la sesión se cerró mientras hablaba: dejamos de persistir
-        with contextlib.suppress(Exception):
-            await websocket.send_json(
-                {
-                    "transcripcion": transcripcion,
-                    "muletillas": muletillas,
-                    "ritmo_wpm": wpm,
-                    "pausas": pausas,
-                }
-            )
 
     tarea_receptor = asyncio.create_task(receptor())
+    tarea_persistidor = asyncio.create_task(persistidor())
     try:
         await transcribir_en_vivo(audio(), on_segmento=on_segmento)
     except BiometricServiceError as exc:
@@ -149,8 +221,14 @@ async def audio_streaming(websocket: WebSocket, sesion_id: int) -> None:
         with contextlib.suppress(Exception):
             await websocket.send_json({"error": "Fallo interno del análisis de voz."})
     finally:
-        tarea_receptor.cancel()
-        with contextlib.suppress(Exception):
-            await tarea_receptor
-        with contextlib.suppress(Exception):
-            await websocket.close()
+        # Limpieza BLINDADA: `shield` garantiza que _cerrar termine aunque el handler esté
+        # siendo cancelado (no fuga tareas ni deja el WS abierto) y, a la vez, RE-PROPAGA esa
+        # cancelación (cancelación estructurada: el task debe terminar como cancelado).
+        limpieza = asyncio.ensure_future(
+            _cerrar(websocket, tarea_receptor, tarea_persistidor, segmentos)
+        )
+        try:
+            await asyncio.shield(limpieza)
+        except asyncio.CancelledError:
+            await limpieza  # espera a que la limpieza acabe pese a la cancelación
+            raise

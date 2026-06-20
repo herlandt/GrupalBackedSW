@@ -1,12 +1,16 @@
 """Capa API (router) — submódulo auditoria (CU-10, RF-01, RF-02)."""
 
+import asyncio
+import logging
+from collections.abc import Callable
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 
-from app.core.database import DbDep
+from app.core.database import DbDep, SessionLocal
 from app.core.enums import CategoriaObservacion, EstadoAnalisis
+from app.core.exceptions import BusinessRuleError, ResourceNotFoundError
 from app.core.internal_auth import RequireInternalToken
 from app.integrations.analysis.port import AnalysisServiceError, AnalysisServicePort
 from app.integrations.factory import get_analysis_service
@@ -19,7 +23,44 @@ from app.modules.auditoria_documental.auditoria.schemas import (
 )
 from app.modules.auditoria_documental.auditoria.service import AuditoriaService
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/auditoria", tags=["auditoria"])
+
+
+async def _procesar_en_segundo_plano(version_id: int) -> None:
+    """Ejecuta el análisis FUERA del ciclo de la petición, con su propia sesión de DB.
+
+    Así el trabajo vive en el servidor y NO se corta si el usuario cambia de pestaña o
+    navega a otra pantalla; el front consulta GET /estado para saber cuándo termina.
+    """
+    logger.info("Análisis 2º plano: inicio (versión %s)", version_id)
+    async with SessionLocal() as db:
+        service = AuditoriaService(db, get_analysis_service())
+        try:
+            await service.procesar_version(version_id)
+            await db.commit()
+            logger.info("Análisis 2º plano: COMPLETADO (versión %s)", version_id)
+        except AnalysisServiceError:
+            await db.commit()  # procesar_version ya marcó ERROR; persistirlo
+            logger.warning("Análisis 2º plano: falló el análisis (versión %s)", version_id)
+        except (BusinessRuleError, ResourceNotFoundError) as exc:
+            await db.rollback()
+            logger.info("Análisis 2º plano: omitido (versión %s): %s", version_id, exc)
+        except Exception:
+            await db.rollback()
+            logger.exception("Análisis 2º plano: error inesperado (versión %s)", version_id)
+
+
+# Mantiene viva la referencia a las tareas de fondo (asyncio podría recolectarlas si no).
+_tareas_fondo: set[asyncio.Task[None]] = set()
+
+
+def _encolar_procesamiento(version_id: int) -> None:
+    """Lanza el análisis como tarea de fondo (fire-and-forget) en el event loop."""
+    tarea = asyncio.create_task(_procesar_en_segundo_plano(version_id))
+    _tareas_fondo.add(tarea)
+    tarea.add_done_callback(_tareas_fondo.discard)
 
 
 def get_auditoria_service(
@@ -30,6 +71,15 @@ def get_auditoria_service(
 
 
 ServiceDep = Annotated[AuditoriaService, Depends(get_auditoria_service)]
+
+
+def get_encolar_analisis() -> Callable[[int], None]:
+    """Encolador del análisis en 2º plano. Es una dependencia para poder sustituirlo por
+    un no-op en tests (la tarea de fondo abre su propia sesión y se saltaría el aislamiento)."""
+    return _encolar_procesamiento
+
+
+EncolarAnalisisDep = Annotated[Callable[[int], None], Depends(get_encolar_analisis)]
 
 
 @router.get("/versiones/{version_id}/resultado", response_model=ResultadoRead)
@@ -67,20 +117,23 @@ async def estado_analisis(
 async def analizar(
     version_id: int,
     service: ServiceDep,
+    encolar: EncolarAnalisisDep,
     user: RequireEstudiante,
     _sub: SuscripcionActiva,
-) -> EstadoAnalisisRead | JSONResponse:
-    """CU-08: el estudiante dispara el análisis de su propia versión (idempotente)."""
-    try:
-        await service.analizar(version_id, user)
-    except AnalysisServiceError:
-        return JSONResponse(
-            status_code=502, content={"detail": "El servicio de análisis no está disponible."}
-        )
+) -> EstadoAnalisisRead:
+    """CU-08: dispara el análisis EN SEGUNDO PLANO y responde de inmediato.
+
+    No bloquea ni se corta si el usuario cambia de pestaña; el cliente consulta
+    GET /versiones/{id}/estado para saber cuándo termina. Idempotente: si ya hay
+    resultado devuelve COMPLETADO, y si ya hay un análisis en curso no lo duplica.
+    """
+    estado, debe_encolar = await service.solicitar_analisis(version_id, user)
+    if debe_encolar:
+        encolar(version_id)
     return EstadoAnalisisRead(
         version_id=version_id,
-        estado_analisis=EstadoAnalisis.COMPLETADO,
-        tiene_resultado=True,
+        estado_analisis=estado,
+        tiene_resultado=estado == EstadoAnalisis.COMPLETADO,
     )
 
 

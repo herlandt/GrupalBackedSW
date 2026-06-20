@@ -20,6 +20,7 @@ from app.integrations.factory import get_analysis_service
 from app.main import app
 from app.modules.administracion.suscripciones.models import PlanSuscripcion, Suscripcion
 from app.modules.administracion.usuarios.models import Usuario
+from app.modules.auditoria_documental.auditoria.router import get_encolar_analisis
 from app.modules.auditoria_documental.documentos.models import Documento, VersionDocumento
 
 # El endpoint interno del worker exige el secreto compartido por cabecera.
@@ -247,20 +248,41 @@ async def test_estudiante_analiza_su_version_cu08(
     client: AsyncClient, estudiante_token: str, db_session: AsyncSession, fake_analysis: None
 ) -> None:
     version_id = await _version_con_suscripcion(db_session)
-    # El estudiante dispara el análisis de su propia versión (sin token interno).
-    r = await client.post(
-        f"/api/v1/auditoria/versiones/{version_id}/analizar", headers=auth(estudiante_token)
-    )
-    assert r.status_code == 200, r.text
-    assert r.json()["estado_analisis"] == "COMPLETADO"
-    # ahora el informe ya existe.
-    r = await client.get(
-        f"/api/v1/auditoria/versiones/{version_id}/resultado", headers=auth(estudiante_token)
-    )
-    assert r.status_code == 200
-    assert r.json()["nivel_documento"] == "ALTO"
-    # idempotente: re-analizar devuelve 200, no error.
-    r = await client.post(
-        f"/api/v1/auditoria/versiones/{version_id}/analizar", headers=auth(estudiante_token)
-    )
-    assert r.status_code == 200
+    # El análisis corre EN SEGUNDO PLANO: sustituimos el encolador por un no-op para no
+    # disparar la tarea de fondo (abre su propia sesión y se saltaría el aislamiento del test).
+    app.dependency_overrides[get_encolar_analisis] = lambda: (lambda _vid: None)
+    try:
+        # El estudiante dispara el análisis: responde de inmediato con EN_PROCESO (no bloquea).
+        r = await client.post(
+            f"/api/v1/auditoria/versiones/{version_id}/analizar", headers=auth(estudiante_token)
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["estado_analisis"] == "EN_PROCESO"
+
+        # El estado consultable refleja que sigue analizando.
+        r = await client.get(
+            f"/api/v1/auditoria/versiones/{version_id}/estado", headers=auth(estudiante_token)
+        )
+        assert r.json()["estado_analisis"] == "EN_PROCESO"
+        assert r.json()["tiene_resultado"] is False
+
+        # El procesamiento real (lo que en producción hace la tarea de fondo) crea el informe.
+        r = await client.post(
+            f"/api/v1/auditoria/internal/procesar/{version_id}", headers=INTERNAL
+        )
+        assert r.status_code == 200, r.text
+
+        r = await client.get(
+            f"/api/v1/auditoria/versiones/{version_id}/resultado", headers=auth(estudiante_token)
+        )
+        assert r.status_code == 200
+        assert r.json()["nivel_documento"] == "ALTO"
+
+        # Idempotente: con el resultado ya creado, re-analizar devuelve COMPLETADO sin recalcular.
+        r = await client.post(
+            f"/api/v1/auditoria/versiones/{version_id}/analizar", headers=auth(estudiante_token)
+        )
+        assert r.status_code == 200
+        assert r.json()["estado_analisis"] == "COMPLETADO"
+    finally:
+        app.dependency_overrides.pop(get_encolar_analisis, None)

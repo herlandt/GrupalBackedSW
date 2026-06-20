@@ -63,29 +63,40 @@ class AwsAnalysisService:
         return AnalisisResultadoDTO(
             nivel_documento=nivel,
             resumen=f"Nivel del documento: {nivel}. Para mejorar: {guia}.{nota}",
-            observaciones=_observaciones(features, texto, temas),
+            observaciones=_observaciones(features, texto, temas, mejoras),
             features=features,
             revision_sugerida=revision,
         )
 
 
 def _observaciones(
-    features: dict[str, float], texto: str, temas: list[str] | None = None
+    features: dict[str, float],
+    texto: str,
+    temas: list[str] | None = None,
+    consejos: list[str] | None = None,
 ) -> list[ObservacionDTO]:
-    """Traduce las features débiles en observaciones del informe (RF-01/RF-02)."""
+    """Traduce features débiles + consejos del modelo en observaciones ACCIONABLES.
+
+    Cada observación dice QUÉ pasa y QUÉ HACER (RF-01/RF-02); las SUGERENCIAS son los
+    consejos priorizados por la IA evaluadora (qué reforzar primero para subir de nivel).
+    """
     obs: list[ObservacionDTO] = []
     if features["coherencia_objetivos_resultados"] < 0.5:
         obs.append(
             ObservacionDTO(
                 "COHERENCIA", "alta",
-                "Baja coherencia entre los objetivos y los resultados/conclusiones.",
+                "Baja coherencia entre los objetivos y los resultados/conclusiones. "
+                "Qué hacer: asegúrate de que cada objetivo tenga un resultado que lo responda "
+                "y que las conclusiones se deriven de esos resultados.",
             )
         )
     if features["cohesion_secciones"] < 0.5:
         obs.append(
             ObservacionDTO(
                 "COHERENCIA", "media",
-                "Las secciones del documento presentan poca cohesión entre sí.",
+                "Las secciones presentan poca cohesión entre sí. Qué hacer: agrega frases de "
+                "enlace entre secciones y un hilo argumental que conecte introducción, "
+                "desarrollo y conclusiones.",
             )
         )
     faltan = [s for s in SECCIONES_ESPERADAS if s not in particionar(texto)]
@@ -93,27 +104,35 @@ def _observaciones(
         obs.append(
             ObservacionDTO(
                 "NORMAS", "media",
-                f"No se detectaron estas secciones esperadas: {', '.join(faltan)}.",
+                f"No se detectaron estas secciones esperadas: {', '.join(faltan)}. "
+                "Qué hacer: agrégalas o titúlalas claramente según la estructura exigida.",
             )
         )
     if features["densidad_referencias"] < 0.3:
         obs.append(
             ObservacionDTO(
-                "NORMAS", "baja", "Se detectaron pocas referencias o citas en el documento."
+                "NORMAS", "baja",
+                "Se detectaron pocas referencias o citas. Qué hacer: respalda las afirmaciones "
+                "clave con citas y verifica que todas aparezcan en la bibliografía.",
             )
         )
+    # SUGERENCIAS accionables: lo que la IA evaluadora recomienda reforzar primero.
+    for c in consejos or []:
+        obs.append(ObservacionDTO("SUGERENCIA", "media", f"Para subir de nivel: {c}."))
     if temas:
         obs.append(
             ObservacionDTO(
                 "SUGERENCIA", "baja",
-                f"Temas detectados en el documento: {', '.join(temas[:6])}.",
+                f"Temas detectados: {', '.join(temas[:6])}. Qué hacer: revisa que el documento "
+                "los defina y desarrolle con claridad.",
             )
         )
     if not obs:
         obs.append(
             ObservacionDTO(
                 "SUGERENCIA", "baja",
-                "El documento cumple los indicadores básicos; revisa la redacción final.",
+                "El documento cumple los indicadores básicos; revisa la redacción final y la "
+                "consistencia de las citas.",
             )
         )
     return obs

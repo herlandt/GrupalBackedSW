@@ -2,6 +2,9 @@
 no contiene lógica de negocio.
 """
 
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -14,10 +17,26 @@ from app.core.config import settings
 from app.core.database import engine
 from app.core.exceptions import BusinessRuleError, ResourceNotFoundError
 from app.modules.administracion.router import router as administracion_router
+from app.modules.auditoria_documental.auditoria.service import reiniciar_analisis_huerfanos
 from app.modules.auditoria_documental.router import router as auditoria_documental_router
 from app.modules.simulador.router import router as simulador_router
 
-app = FastAPI(title=settings.app_name, debug=settings.debug)
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Recupera al arrancar los análisis que quedaron EN_PROCESO por un reinicio."""
+    try:
+        n = await reiniciar_analisis_huerfanos()
+        if n:
+            logger.info("Arranque: %d análisis huérfanos reiniciados a PENDIENTE", n)
+    except Exception:
+        logger.exception("Arranque: no se pudieron reiniciar los análisis huérfanos")
+    yield
+
+
+app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
 
 # El frontend (web y móvil) vive en orígenes separados.
 app.add_middleware(

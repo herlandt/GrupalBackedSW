@@ -2,9 +2,11 @@
 
 from collections.abc import Sequence
 
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit.service import AuditService
+from app.core.database import SessionLocal
 from app.core.enums import CategoriaObservacion, EstadoAnalisis, NivelPreparacion
 from app.core.exceptions import BusinessRuleError, ResourceNotFoundError
 from app.integrations.analysis.port import AnalysisServiceError, AnalysisServicePort
@@ -16,6 +18,23 @@ from app.modules.auditoria_documental.auditoria.repository import (
 )
 from app.modules.auditoria_documental.documentos.models import Documento, VersionDocumento
 from app.modules.auditoria_documental.documentos.repository import VersionRepository
+
+
+async def reiniciar_analisis_huerfanos() -> int:
+    """Al arrancar, devuelve a PENDIENTE los análisis que quedaron EN_PROCESO.
+
+    Un EN_PROCESO tras un reinicio es un trabajo ABANDONADO (el proceso que lo ejecutaba
+    murió: las tareas de fondo no sobreviven al reinicio). Así el usuario puede reintentar
+    en vez de quedarse con un "Analizando…" eterno. Devuelve cuántos se reiniciaron.
+    """
+    async with SessionLocal() as db:
+        resultado = await db.execute(
+            update(VersionDocumento)
+            .where(VersionDocumento.estado_analisis == EstadoAnalisis.EN_PROCESO)
+            .values(estado_analisis=EstadoAnalisis.PENDIENTE)
+        )
+        await db.commit()
+        return resultado.rowcount or 0  # type: ignore[attr-defined]  # CursorResult en UPDATE
 
 
 class AuditoriaService:
@@ -63,17 +82,38 @@ class AuditoriaService:
             return existente
         return await self.procesar_version(version_id)
 
+    async def solicitar_analisis(
+        self, version_id: int, usuario: Usuario
+    ) -> tuple[EstadoAnalisis, bool]:
+        """Marca la versión EN_PROCESO para analizarla EN SEGUNDO PLANO (no bloquea).
+
+        Devuelve `(estado, encolar)` donde `encolar` indica si hay que lanzar el trabajo:
+        - COMPLETADO -> ya hay resultado, no recalcula (False).
+        - EN_PROCESO ya existente -> hay un análisis en curso, no duplicar (False).
+        - PENDIENTE/ERROR -> pasa a EN_PROCESO y se debe encolar (True). ERROR permite reintento.
+        """
+        version = await self._version_del_usuario(version_id, usuario)
+        if await self.resultados.por_version(version_id) is not None:
+            return EstadoAnalisis.COMPLETADO, False
+        if version.estado_analisis == EstadoAnalisis.EN_PROCESO:
+            return EstadoAnalisis.EN_PROCESO, False
+        version.estado_analisis = EstadoAnalisis.EN_PROCESO
+        await self.db.flush()
+        return EstadoAnalisis.EN_PROCESO, True
+
     # --- Worker interno: procesa una versión encolada --------------------
     async def procesar_version(self, version_id: int) -> ResultadoAuditoria:
-        """Procesa una versión encolada. Idempotente: si ya hay resultado, no recalcula."""
+        """Procesa una versión encolada. Idempotente: si ya hay resultado, no recalcula.
+
+        Hace el ANÁLISIS (lento, 1-2 min) ANTES de escribir nada, para no mantener un lock
+        de fila sobre la versión durante todo el proceso (bloquearía las consultas de estado
+        y los reintentos). El estado EN_PROCESO lo marca quien encola (la petición).
+        """
         version = await self.versiones.get(version_id)
         if version is None:
             raise ResourceNotFoundError(f"Versión {version_id} no existe")
         if await self.resultados.por_version(version_id) is not None:
             raise BusinessRuleError("La versión ya tiene resultados de auditoría")
-
-        version.estado_analisis = EstadoAnalisis.EN_PROCESO
-        await self.db.flush()
 
         try:
             dto = await self.analysis.analizar(

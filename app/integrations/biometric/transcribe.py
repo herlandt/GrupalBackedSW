@@ -198,8 +198,11 @@ async def transcribir_en_vivo(audio: AsyncIterator[bytes], *, on_segmento: OnSeg
             media_sample_rate_hz=16000,
             media_encoding="pcm",
             # Estabilización: entrega palabras estables en ~1-2 s, sin esperar al final.
+            # "medium" equilibra responsividad/precisión: "high" tardaba tanto en marcar
+            # estables que apenas emitía palabras (se veía "no capta bien"); "low" revisaría
+            # demasiado. Medium emite más rápido sin recontar a cada momento.
             enable_partial_results_stabilization=True,
-            partial_results_stability="high",
+            partial_results_stability="medium",
         )
     except Exception as exc:  # red / credenciales / región sin Transcribe
         raise BiometricServiceError(f"Transcribe no pudo iniciar el stream: {exc}") from exc

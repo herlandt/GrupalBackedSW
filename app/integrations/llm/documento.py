@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 
 import anyio
 
@@ -86,7 +87,20 @@ _GENERICAS = {"figura", "figuras", "tabla", "tablas", "cuadro", "cuadros", "graf
               "cantidad", "cantidades", "efecto", "efectos", "nivel", "niveles", "total", "totales",
               "promedio", "medida", "medidas", "resultado", "resultados", "objetivo", "objetivos",
               "metodo", "método", "metodologia", "metodología", "conclusion", "conclusión",
-              "conclusiones", "introduccion", "introducción", "problema", "estudio", "trabajo"}
+              "conclusiones", "introduccion", "introducción", "problema", "estudio", "trabajo",
+              # términos genéricos de software/sistemas que producen preguntas incoherentes al
+              # anclar una defensa de tesis (vistos en documentos técnicos: «correo», etc.)
+              "sistema", "sistemas", "usuario", "usuarios", "aplicacion", "aplicación",
+              "funcionalidad", "funcionalidades", "modulo", "módulo", "modulos", "módulos",
+              "interfaz", "pantalla", "pantallas", "boton", "botón", "formulario", "menu", "menú",
+              "correo", "correo electronico", "correo electrónico", "email", "identificacion",
+              "identificación", "funcionamiento", "correcto funcionamiento", "analisis detallado",
+              "análisis detallado", "informacion", "información", "proceso", "procesos"}
+
+# Caracteres válidos en una frase clave en español: letras (con tildes/ñ), dígitos, espacios y
+# guion. Si aparece cualquier otra cosa (p. ej. artefactos de fuentes PDF rotas como «ƌŶĐǆŵϯ» o
+# símbolos sueltos como «&»), la frase se descarta por ilegible.
+_FRASE_VALIDA = re.compile(r"^[0-9a-záéíóúüñ .\-]+$")
 
 
 def _limpiar_frases(frases: list[str]) -> list[str]:
@@ -104,7 +118,9 @@ def _limpiar_frases(frases: list[str]) -> list[str]:
             palabras.pop(0)
         frase = " ".join(palabras).strip(" .,:;()«»\"'")
         # Descarta: cortas; largas o con puntos de relleno (líneas del índice del PDF);
-        # genéricas; y casi-numéricas ("100 %", "2019"). Exige ≥3 letras.
+        # genéricas; casi-numéricas ("100 %", "2019"); ilegibles (fuente PDF rota / símbolos);
+        # y sin ninguna palabra de contenido (≥4 letras), que dan preguntas pobres.
+        contenido = [p for p in palabras if len(p) >= 4 and p not in _ARTICULOS]
         if (
             len(frase) < 4
             or len(frase) > 60
@@ -112,14 +128,45 @@ def _limpiar_frases(frases: list[str]) -> list[str]:
             or "...." in frase
             or frase in _GENERICAS
             or sum(c.isalpha() for c in frase) < 3
+            or not _FRASE_VALIDA.match(frase)
+            or not contenido
         ):
             continue
         if frase in vistas:
             continue
         vistas.add(frase)
         limpias.append(frase)
-    limpias.sort(key=lambda s: (len(s.split()), len(s)), reverse=True)
+    # Ordena por ESPECIFICIDAD: primero las de más palabras de contenido y más largas, que
+    # suelen ser los conceptos sustantivos defendibles de la tesis (no términos sueltos).
+    limpias.sort(
+        key=lambda s: (len([p for p in s.split() if len(p) >= 4]), len(s.split()), len(s)),
+        reverse=True,
+    )
     return limpias
+
+
+def _es_linea_util(linea: str) -> bool:
+    """True si la línea parece prosa real (no índice/TOC, número de página ni encabezado).
+
+    Las tesis traen un índice con líderes de puntos ('Hipótesis…………12') y números de página
+    sueltos que, si se mandan a Comprehend, generan frases clave basura. Esta criba deja solo
+    líneas con suficiente texto y poca proporción de puntos/dígitos.
+    """
+    s = linea.strip()
+    if len(s) < 25:  # encabezados, números de página, fragmentos sueltos
+        return False
+    if "…" in s or "...." in s:  # entradas del índice (líderes de puntos)
+        return False
+    if s.count(".") > len(s) / 5:  # demasiados puntos → índice/TOC
+        return False
+    if sum(c.isdigit() for c in s) > len(s) / 4:  # demasiados dígitos → tablas/índice
+        return False
+    return True
+
+
+def _cuerpo_analizable(texto: str) -> str:
+    """Deja solo las líneas de prosa real de una sección (sin índice/TOC ni ruido)."""
+    return "\n".join(linea for linea in texto.splitlines() if _es_linea_util(linea))
 
 
 class DocumentoTribunal(TribunalLLMPort):
@@ -157,12 +204,16 @@ class DocumentoTribunal(TribunalLLMPort):
         preguntas: list[str] = []
         usaron_fallback = 0
         for clave in _SECCIONES_ORDEN:  # orden lógico de la defensa
-            cuerpo = secciones.get(clave, "").strip()
+            # Limpia el cuerpo (quita índice/TOC y ruido) ANTES de Comprehend: así las frases
+            # clave salen de prosa real y no de líneas de tabla de contenido.
+            cuerpo = _cuerpo_analizable(secciones.get(clave, "")).strip()
             if not cuerpo:
                 continue
-            # 1 llamada a Comprehend por sección (max_trozos=1): suficiente y mucho más barato.
-            frases = _limpiar_frases(extractor.temas_clave(cuerpo, n=10, max_trozos=1))
+            # Hasta 2 trozos repartidos por la sección: mejor cobertura y señal de frecuencia
+            # (los conceptos recurrentes suben), manteniendo bajo el nº de llamadas a AWS.
+            frases = _limpiar_frases(extractor.temas_clave(cuerpo, n=12, max_trozos=2))
             if not frases:
+                # Sin frases clave útiles: ancla con la primera frase real de la prosa limpia.
                 frases = [_resumen_corto(cuerpo)]
                 usaron_fallback += 1
             # Elige plantillas y frases AL AZAR (de las más específicas) sin repetir: cada
@@ -176,7 +227,19 @@ class DocumentoTribunal(TribunalLLMPort):
                 preguntas.append(plantilla.format(frase=elegidas[j % len(elegidas)]))
         if usaron_fallback:
             logger.info("Tribunal: %d sección(es) usaron respaldo", usaron_fallback)
-        return preguntas[: _MAX_TOTAL.get(nivel_dificultad, 5)]
+
+        # Si el documento aportó pocas preguntas (secciones ilegibles/ausentes), completa el set
+        # con preguntas generales de defensa para que el estudiante reciba un set completo y
+        # coherente, sin inventar frases basura.
+        objetivo = _MAX_TOTAL.get(nivel_dificultad, 5)
+        preguntas = preguntas[:objetivo]
+        if preguntas:
+            for generica in _PLANTILLA.get(nivel_dificultad, _PLANTILLA["ESTANDAR"]):
+                if len(preguntas) >= objetivo:
+                    break
+                if generica not in preguntas:
+                    preguntas.append(generica)
+        return preguntas
 
     async def evaluar_respuesta(self, *, pregunta: str, respuesta: str) -> EvaluacionDTO:
         return await anyio.to_thread.run_sync(self._evaluar, pregunta, respuesta)

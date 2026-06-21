@@ -39,8 +39,17 @@ class Settings(BaseSettings):
     # Servicio biométrico: "stub" (dev) | "aws" (Rekognition detect_faces por frame).
     biometric_backend: str = "stub"
     # Tribunal virtual: "stub" (preguntas genéricas) | "aws" (preguntas desde el documento
-    # real con Comprehend + evaluación por similitud Titan; sin LLM generativo).
+    # real con Comprehend + evaluación por similitud Titan; sin LLM generativo) | "claude"
+    # (Claude en Bedrock genera las preguntas, coherentes; evalúa por similitud; cae a "aws"
+    # si Claude falla/no hay acceso — complementario y de bajo costo).
     tribunal_llm_backend: str = "stub"
+    # Modelo Claude (Bedrock) para el tribunal "claude". Inference profile us. (los 4.x no
+    # admiten on-demand directo). Haiku = el más barato; suficiente para generar preguntas.
+    tribunal_claude_model: str = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    # Tribunal "gemini": API de Google AI Studio (tier gratuito). En GEMINI_API_KEY puedes
+    # poner UNA o VARIAS keys separadas por coma; al agotarse una (HTTP 429) salta a la siguiente.
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"
 
     # --- CORS (frontend web y móvil son separados) ---
     # NoDecode: evita que pydantic-settings intente parsear el valor como JSON,
@@ -78,6 +87,11 @@ class Settings(BaseSettings):
     test_database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/tesisguard_test"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @property
+    def gemini_api_keys(self) -> list[str]:
+        """Lista de claves de Gemini (GEMINI_API_KEY admite varias separadas por coma)."""
+        return [k.strip() for k in self.gemini_api_key.split(",") if k.strip()]
 
     @field_validator("cors_origins", mode="before")
     @classmethod

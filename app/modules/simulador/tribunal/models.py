@@ -47,6 +47,8 @@ class ResultadoSimulacion(Base, IdMixin, CreatedAtMixin):
     oratoria_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
     comunicacion_no_verbal_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
     dominio_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    # Coherencia (0..100) entre lo que el estudiante DIJO y su documento (similitud semántica).
+    coherencia_documento_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
     resumen: Mapped[str | None] = mapped_column(Text)
     # Confianza calibrada de la IA y vector de features que la produjo (trazabilidad +
     # futuro reentrenamiento con datos reales).

@@ -15,6 +15,7 @@ from app.integrations.analysis.extraction import (
     extraer_texto,
     particionar,
     resolver_path,
+    trozos,
 )
 from app.integrations.analysis.features import DocumentoFeatures
 from app.integrations.analysis.port import (
@@ -34,6 +35,42 @@ class AwsAnalysisService:
         # El análisis es BLOQUEANTE (lectura de PDF + boto3 sync + RandomForest, ~1-2 min);
         # lo movemos a un hilo para no congelar el event loop del servidor mientras corre.
         return await anyio.to_thread.run_sync(self._analizar, archivo_url, formato)
+
+    async def coherencia_discurso(
+        self, *, archivo_url: str, formato: str, discurso: str
+    ) -> float:
+        # Lectura del documento + embeddings de Bedrock son BLOQUEANTES → a un hilo.
+        # abandon_on_cancel=True: si el fail_after del cierre vence, soltamos el hilo en vez
+        # de esperar a que termine (de lo contrario el timeout no protegería nada).
+        return await anyio.to_thread.run_sync(
+            self._coherencia_discurso, archivo_url, formato, discurso, abandon_on_cancel=True
+        )
+
+    def _coherencia_discurso(self, archivo_url: str, formato: str, discurso: str) -> float:
+        """Similitud semántica entre el discurso (transcripción) y el documento COMPLETO.
+
+        Compara el discurso contra cada SECCIÓN de la tesis (no solo la portada/intro) y toma
+        el promedio de las 3 mejores coincidencias: premia cubrir las partes sustantivas
+        (objetivos, metodología, resultados, conclusiones) sin exigir recitar el documento.
+        """
+        try:
+            path = resolver_path(archivo_url)
+            texto = extraer_texto(path, formato)
+        except Exception as exc:  # archivo ilegible / formato roto
+            raise AnalysisServiceError(f"No se pudo leer el documento: {exc}") from exc
+        # Sin capa de texto: NO disparamos OCR (Textract, hasta minutos) dentro del cierre
+        # SÍNCRONO de la sesión; la señal no es medible aquí → se trata como NEUTRA aguas arriba.
+        if len(texto.strip()) < 100:
+            raise AnalysisServiceError("El documento no tiene texto legible para coherencia")
+        fragmentos = _fragmentos_documento(texto)
+        if not fragmentos:
+            raise AnalysisServiceError("El documento no tiene fragmentos analizables")
+        extractor = DocumentoFeatures(
+            get_aws_client("comprehend"), get_aws_client("bedrock-runtime")
+        )
+        sims = [extractor.similitud(discurso, f) for f in fragmentos]
+        mejores = sorted(sims, reverse=True)[:3]
+        return round(sum(mejores) / len(mejores), 3)
 
     def _analizar(self, archivo_url: str, formato: str) -> AnalisisResultadoDTO:
         path = resolver_path(archivo_url)
@@ -67,6 +104,27 @@ class AwsAnalysisService:
             features=features,
             revision_sugerida=revision,
         )
+
+
+def _fragmentos_documento(texto: str) -> list[str]:
+    """Fragmentos representativos de TODO el documento (no solo la portada/intro).
+
+    Usa las secciones lógicas (problema, objetivos, metodología, resultados, conclusiones) si
+    se detectan; si no, muestrea trozos repartidos por todo el texto. Cada fragmento cabe en
+    el embedding sin truncar. Acotado (≤6-8 trozos) para no disparar el coste/latencia de
+    Bedrock dentro del cierre de la sesión.
+    """
+    secciones = particionar(texto)
+    claves = ("problema", "objetivos", "metodologia", "resultados", "conclusiones", "introduccion")
+    frags = [trozos(secciones[k])[0] for k in claves if secciones.get(k, "").strip()]
+    if frags:
+        return frags[:6]
+    # Sin secciones reconocidas: muestrea trozos repartidos por todo el documento (máx 8).
+    todos = trozos(texto)
+    if len(todos) <= 8:
+        return todos
+    paso = max(1, len(todos) // 8)
+    return todos[::paso][:8]
 
 
 def _observaciones(

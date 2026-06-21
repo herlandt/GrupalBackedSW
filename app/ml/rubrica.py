@@ -57,6 +57,10 @@ DEFENSA: dict[str, Indicador] = {
         {"BAJO": (100.0, 22.0), "MEDIO": (118.0, 16.0), "ALTO": (138.0, 10.0)}, (60.0, 200.0), +1),
     "pausas_largas_por_min": Indicador(
         {"BAJO": (5.0, 2.0), "MEDIO": (2.5, 1.3), "ALTO": (0.8, 0.6)}, (0.0, 15.0), -1),
+    # Coherencia entre lo que el estudiante DICE (transcripción) y su DOCUMENTO: similitud
+    # semántica (embeddings). Mide que la exposición cubra y no contradiga la tesis (↑ mejor).
+    "coherencia_discurso_documento": Indicador(
+        {"BAJO": (0.40, 0.14), "MEDIO": (0.62, 0.13), "ALTO": (0.82, 0.10)}, (0.0, 1.0), +1),
 }
 
 DIMENSIONES: dict[str, dict[str, Indicador]] = {"documento": DOCUMENTO, "defensa": DEFENSA}
@@ -86,6 +90,8 @@ PESOS: dict[str, dict[str, float]] = {
         "muletillas_por_min": 1.0,
         "ritmo_ppm": 1.0,
         "pausas_largas_por_min": 0.8,
+        # Dominar y exponer fielmente el documento es núcleo de una buena defensa.
+        "coherencia_discurso_documento": 1.4,
     },
 }
 
@@ -100,9 +106,13 @@ def pesos(dim: str) -> list[float]:
 
 
 def combinar_niveles(nivel_doc: str, nivel_def: str) -> str:
-    """Nivel general = promedio ordinal de documento y defensa, redondeado."""
-    promedio = round((ORDEN_NIVEL[nivel_doc] + ORDEN_NIVEL[nivel_def]) / 2)
-    return NIVELES[promedio]
+    """Nivel general = promedio ordinal de documento y defensa, con EMPATE hacia arriba.
+
+    Se usa `(a+b+1)//2` (no `round`, que aplica banker's rounding y desempataba asimétrico:
+    BAJO+MEDIO→BAJO pero MEDIO+ALTO→ALTO). Ahora los empates suben de forma consistente.
+    """
+    indice = (ORDEN_NIVEL[nivel_doc] + ORDEN_NIVEL[nivel_def] + 1) // 2
+    return NIVELES[indice]
 
 
 def factores_debiles(
@@ -122,6 +132,9 @@ def factores_debiles(
     for nombre, ind in DIMENSIONES[dim].items():
         lo, hi = ind.rango
         norm = (valores[nombre] - lo) / (hi - lo) if hi > lo else 0.0
+        # Recorta a [0,1]: ritmo/muletillas pueden venir fuera de rango (sin clip) y un
+        # déficit negativo o >1 distorsionaría el ranking de factores a reforzar.
+        norm = min(1.0, max(0.0, norm))
         deficit = (1.0 - norm) if ind.direccion == 1 else norm
         debilidades.append((deficit * pesos.get(nombre, 1.0), nombre))
     debilidades.sort(reverse=True)
@@ -143,6 +156,7 @@ ETIQUETA: dict[str, str] = {
     "muletillas_por_min": "las muletillas por minuto",
     "ritmo_ppm": "el ritmo de habla (palabras/min)",
     "pausas_largas_por_min": "las pausas largas",
+    "coherencia_discurso_documento": "la coherencia entre tu exposición y tu documento",
 }
 
 

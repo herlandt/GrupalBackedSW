@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from collections import Counter
 from typing import Any
@@ -20,6 +21,18 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 from app.core.config import settings
 from app.integrations.analysis.extraction import SECCIONES_ESPERADAS, particionar, trozos
+
+logger = logging.getLogger(__name__)
+
+
+def _muestra_trozos(texto: str, n: int) -> list[str]:
+    """Hasta `n` trozos REPARTIDOS por todo el texto (no solo el inicio): evita sesgar el
+    análisis a las primeras páginas en tesis largas, manteniendo el tope de llamadas AWS."""
+    todos = trozos(texto)
+    if len(todos) <= n:
+        return todos
+    paso = max(1, len(todos) // n)
+    return todos[::paso][:n]
 
 _CITA = re.compile(
     r"\([^)]*\b\d{4}[a-z]?\)"  # paréntesis con un año: (Autor, 2020), (X & Y, 2019)
@@ -75,7 +88,10 @@ class DocumentoFeatures:
                     body=json.dumps({"inputText": limpio[:8000]}),
                 )
                 emb = list(json.loads(resp["body"].read())["embedding"])
-            except Exception:  # Bedrock no habilitado / throttling / red -> fallback léxico
+            except Exception as exc:  # Bedrock no habilitado / throttling / red -> fallback léxico
+                # Degradación silenciosa NO: la coherencia/cohesión pasan a similitud léxica
+                # (otra escala). Se avisa para diagnosticar throttling o falta de model access.
+                logger.warning("Bedrock embeddings no disponible, usando fallback léxico: %s", exc)
                 emb = None
         self._cache_embed[clave] = emb
         return emb
@@ -86,29 +102,37 @@ class DocumentoFeatures:
             return max(0.0, _coseno(ea, eb))
         return _cos_lexico(a, b)
 
-    def _frases_clave(self, texto: str) -> int:
+    def similitud(self, a: str, b: str) -> float:
+        """Similitud semántica (0..1) entre dos textos: coseno de embeddings Titan con
+        fallback léxico (CountVectorizer) si Bedrock no responde. API pública del extractor."""
+        return self._similitud(a, b)
+
+    def _frases_clave(self, texto: str, max_trozos: int = 4) -> int:
         if self.comprehend is None:
             return len(texto.split()) // 20
         total = 0
-        for trozo in trozos(texto)[:4]:  # tope para no gastar de más
+        for trozo in _muestra_trozos(texto, max_trozos):  # repartido por todo el documento
             try:
                 r = self.comprehend.detect_key_phrases(Text=trozo, LanguageCode="es")
-                total += len(r["KeyPhrases"])
-            except Exception:
+                total += len(r.get("KeyPhrases", []))
+            except Exception as exc:
+                logger.warning("Comprehend (frases) no disponible, fallback léxico: %s", exc)
                 total += len(trozo.split()) // 20
         return total
 
-    def temas_clave(self, texto: str, n: int = 6) -> list[str]:
-        """Frases clave más frecuentes (Comprehend) para el feedback de 'temas detectados'."""
+    def temas_clave(self, texto: str, n: int = 6, max_trozos: int = 4) -> list[str]:
+        """Frases clave más frecuentes (Comprehend). `max_trozos` acota nº de llamadas; el
+        muestreo va repartido por el documento (no solo las primeras páginas)."""
         if self.comprehend is None:
             return []
         conteo: Counter[str] = Counter()
-        for trozo in trozos(texto)[:4]:
+        for trozo in _muestra_trozos(texto, max_trozos):
             try:
                 r = self.comprehend.detect_key_phrases(Text=trozo, LanguageCode="es")
-            except Exception:
+            except Exception as exc:
+                logger.warning("Comprehend (temas) no disponible: %s", exc)
                 continue
-            for kp in r["KeyPhrases"]:
+            for kp in r.get("KeyPhrases", []):
                 tema = kp["Text"].strip().lower()
                 if len(tema) > 3:
                     conteo[tema] += 1

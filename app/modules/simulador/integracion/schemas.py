@@ -16,6 +16,7 @@ class ResultadoSimulacionRead(BaseModel):
     oratoria_score: float | None
     comunicacion_no_verbal_score: float | None
     dominio_score: float | None
+    coherencia_documento_score: float | None  # 0..100: discurso vs documento
     confianza: float | None  # confianza calibrada de la IA (0..1)
     resumen: str | None
     created_at: datetime

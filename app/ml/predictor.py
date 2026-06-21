@@ -7,6 +7,7 @@ proceso** dentro del backend: se despliega junto con él, sin servicio HTTP apar
 
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -14,9 +15,12 @@ from typing import Any
 import joblib
 import pandas as pd
 
+from app.integrations.evaluador.port import EvaluadorServiceError
 from app.ml import rubrica
 
 MODELS_DIR = Path(__file__).resolve().parent / "models"
+
+logger = logging.getLogger(__name__)
 
 # Abstención: por debajo de estos umbrales el juicio es de FRONTERA y se sugiere revisión
 # humana en vez de sentenciar (la confianza ya está calibrada). AJUSTABLES por el equipo.
@@ -35,6 +39,14 @@ def predecir(dim: str, valores: dict[str, float]) -> dict[str, Any]:
     """Predice nivel + confianza + factores a reforzar para la dimensión dada."""
     bundle = _bundle(dim)
     columnas: list[str] = bundle["features"]
+    # Validación explícita: una feature faltante daría un KeyError críptico, y una clave de más
+    # suele indicar un .pkl desactualizado (entrenado con otro conjunto de features).
+    faltan = [c for c in columnas if c not in valores]
+    if faltan:
+        raise EvaluadorServiceError(f"dimensión '{dim}': faltan features {faltan}")
+    extra = [k for k in valores if k not in columnas]
+    if extra:
+        logger.warning("modelo '%s' posiblemente desactualizado: ignora features %s", dim, extra)
     x = pd.DataFrame([[valores[c] for c in columnas]], columns=columnas)
     modelo = bundle["modelo"]
     proba = modelo.predict_proba(x)[0]

@@ -42,3 +42,10 @@ class AnalysisServicePort(Protocol):
     ) -> AnalisisResultadoDTO:
         """Pide al microservicio el análisis de una versión y devuelve el resultado neutral."""
         ...
+
+    async def coherencia_discurso(
+        self, *, archivo_url: str, formato: str, discurso: str
+    ) -> float:
+        """Similitud semántica (0..1) entre un DISCURSO (transcripción de la defensa) y el
+        documento. Mide que lo expuesto cubra/no contradiga la tesis (RF-04/05 + RF-01)."""
+        ...

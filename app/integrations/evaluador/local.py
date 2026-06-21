@@ -24,6 +24,7 @@ class LocalEvaluadorService(EvaluadorServicePort):
             "muletillas_por_min": features.muletillas_por_min,
             "ritmo_ppm": features.ritmo_ppm,
             "pausas_largas_por_min": features.pausas_largas_por_min,
+            "coherencia_discurso_documento": features.coherencia_discurso_documento,
         }
         # predict_proba de RandomForest es síncrono y bloqueante: a un hilo para no
         # congelar el event loop (igual que la ruta 'documento' en analysis/aws.py).

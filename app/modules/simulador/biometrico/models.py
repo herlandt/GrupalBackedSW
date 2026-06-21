@@ -3,7 +3,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import ForeignKey, Index, Integer, Numeric
+from sqlalchemy import ForeignKey, Index, Integer, Numeric, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, CreatedAtMixin, IdMixin
@@ -22,4 +22,7 @@ class MetricaBiometrica(Base, IdMixin, CreatedAtMixin):
     # Pausas largas medidas desde el timing de Transcribe (RF-05). 0 en filas de video.
     pausas_largas_conteo: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     contacto_visual_pct: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    # Texto reconocido por Transcribe en este segmento (RF-05). Vacío en filas de solo video.
+    # Se concatena al cerrar la sesión para medir la coherencia discurso↔documento.
+    transcripcion_texto: Mapped[str] = mapped_column(Text, default="", server_default="")
     momento: Mapped[datetime]

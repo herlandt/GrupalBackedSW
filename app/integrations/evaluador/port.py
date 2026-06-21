@@ -23,6 +23,7 @@ class DefensaFeatures:
     muletillas_por_min: float  # >=0   (↓ mejor)
     ritmo_ppm: float  # >0
     pausas_largas_por_min: float  # >=0   (↓ mejor)
+    coherencia_discurso_documento: float  # 0..1  (↑ mejor) — discurso vs documento
 
 
 @dataclass

@@ -143,6 +143,7 @@ class BiometricoService:
             ritmo_wpm=wpm,
             pausas_largas_conteo=pausas,
             contacto_visual_pct=None,
+            transcripcion_texto=transcripcion or "",
             momento=_now(),
         )
         await self.metricas.add(metrica)

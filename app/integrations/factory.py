@@ -58,7 +58,12 @@ def get_analysis_service() -> AnalysisServicePort:
 
 @lru_cache
 def get_tribunal_llm() -> TribunalLLMPort:
-    # En producción se conectará el adaptador real del LLM (settings.tribunal_llm_backend).
+    # "aws": preguntas DESDE el documento real (Comprehend + plantillas) y evaluación por
+    # similitud Titan — sin LLM generativo (no requiere acceso a Claude/Bedrock generativo).
+    if settings.tribunal_llm_backend == "aws":
+        from app.integrations.llm.documento import DocumentoTribunal
+
+        return DocumentoTribunal()
     return StubTribunalLLM()
 
 

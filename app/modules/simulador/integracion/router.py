@@ -9,8 +9,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 
 from app.core.database import DbDep
+from app.integrations.analysis.port import AnalysisServicePort
 from app.integrations.evaluador.port import EvaluadorServicePort
-from app.integrations.factory import get_evaluador_service
+from app.integrations.factory import get_analysis_service, get_evaluador_service
 from app.modules.administracion.suscripciones.dependencies import SuscripcionActiva
 from app.modules.administracion.usuarios.dependencies import RequireEstudiante
 from app.modules.simulador.integracion.schemas import ResultadoSimulacionRead
@@ -22,8 +23,9 @@ router = APIRouter(prefix="/simulaciones", tags=["simulador-resultado"])
 def get_integracion_service(
     db: DbDep,
     evaluador: Annotated[EvaluadorServicePort, Depends(get_evaluador_service)],
+    analysis: Annotated[AnalysisServicePort, Depends(get_analysis_service)],
 ) -> IntegracionService:
-    return IntegracionService(db, evaluador)
+    return IntegracionService(db, evaluador, analysis)
 
 
 ServiceDep = Annotated[IntegracionService, Depends(get_integracion_service)]

@@ -69,7 +69,8 @@ class MonitoreoService:
     async def _nivel_general(self, usuario: Usuario) -> NivelPreparacion:
         """Combinación ordinal de documento (Sprint 2) y defensa (Sprint 3).
 
-        Misma regla que ``rubrica.combinar_niveles``: promedio ordinal redondeado.
+        Misma regla que ``rubrica.combinar_niveles``: promedio ordinal con EMPATE hacia arriba
+        (``(a+b+1)//2``, evita el banker's rounding asimétrico de ``round``).
         Si falta una dimensión, devuelve la otra; si faltan ambas, MEDIO (neutro).
         """
         doc = await self._nivel_documento(usuario.id)
@@ -79,8 +80,8 @@ class MonitoreoService:
             return NivelPreparacion.MEDIO
         if len(presentes) == 1:
             return presentes[0]
-        promedio = round((_ORDEN[presentes[0]] + _ORDEN[presentes[1]]) / 2)
-        return _NIVELES[promedio]
+        indice = (_ORDEN[presentes[0]] + _ORDEN[presentes[1]] + 1) // 2
+        return _NIVELES[indice]
 
     async def _get_estudiante(self, usuario_id: int) -> Usuario:
         usuario = await self.estudiantes.get(usuario_id)

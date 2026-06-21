@@ -28,7 +28,7 @@ class Settings(BaseSettings):
 
     # --- AWS (usa el perfil de AWS CLI configurado en la máquina) ---
     aws_profile: str | None = "default"
-    aws_region: str = "us-east-2"
+    aws_region: str = "us-east-1"  # región real del despliegue (Bedrock/Textract/S3/EC2)
     s3_documents_bucket: str | None = None
     s3_video_bucket: str | None = None
     textract_bucket: str | None = None  # bucket para OCR de PDFs escaneados (Textract async)
@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     bedrock_embeddings_model: str = "amazon.titan-embed-text-v2:0"
     # Servicio biométrico: "stub" (dev) | "aws" (Rekognition detect_faces por frame).
     biometric_backend: str = "stub"
+    # Tribunal virtual: "stub" (preguntas genéricas) | "aws" (preguntas desde el documento
+    # real con Comprehend + evaluación por similitud Titan; sin LLM generativo).
+    tribunal_llm_backend: str = "stub"
 
     # --- CORS (frontend web y móvil son separados) ---
     # NoDecode: evita que pydantic-settings intente parsear el valor como JSON,

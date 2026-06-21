@@ -51,3 +51,10 @@ class StubAnalysisService(AnalysisServicePort):
                 ),
             ],
         )
+
+    async def coherencia_discurso(
+        self, *, archivo_url: str, formato: str, discurso: str
+    ) -> float:
+        # Dev/test sin AWS: 0.0 si no hubo discurso; si no, valor neutro determinista (la
+        # coherencia real va en el backend "aws").
+        return 0.6 if discurso.strip() else 0.0

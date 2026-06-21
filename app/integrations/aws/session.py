@@ -5,6 +5,7 @@ adaptadores concretos (S3, SES, SQS...) se añadirán cuando exista un caso de u
 que los consuma (Ciclo 2+), respetando YAGNI.
 """
 
+import os
 from functools import lru_cache
 from typing import Any
 
@@ -14,8 +15,13 @@ from botocore.config import Config
 from app.core.config import settings
 
 # Reintentos ADAPTATIVOS ante throttling (Bedrock/Comprehend/Textract aplican cuotas
-# agresivas); el backoff con jitter evita caer al fallback léxico por un pico transitorio.
-_RETRY_CONFIG = Config(retries={"max_attempts": 5, "mode": "adaptive"})
+# agresivas) + TIMEOUTS de cliente para que una llamada atascada no bloquee indefinidamente
+# (tope duro dentro del hilo, complementa al fail_after del cierre de sesión).
+_RETRY_CONFIG = Config(
+    retries={"max_attempts": 4, "mode": "adaptive"},
+    connect_timeout=5,
+    read_timeout=20,
+)
 
 
 @lru_cache
@@ -30,6 +36,10 @@ def get_boto_session() -> boto3.Session:
             profile_name=settings.aws_profile,
             region_name=settings.aws_region,
         )
+    # Sin perfil (producción: rol IAM de la instancia). OJO: si el entorno trae un
+    # AWS_PROFILE VACÍO (`AWS_PROFILE=`), boto3 lo tomaría como el perfil "" y fallaría con
+    # ProfileNotFound. Lo quitamos para usar la cadena de credenciales por defecto (rol EC2).
+    os.environ.pop("AWS_PROFILE", None)
     return boto3.Session(region_name=settings.aws_region)
 
 

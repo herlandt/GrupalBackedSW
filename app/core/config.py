@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     # poner UNA o VARIAS keys separadas por coma; al agotarse una (HTTP 429) salta a la siguiente.
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
+    # Embeddings de Gemini (gratis) para la coherencia discurso↔documento: si hay GEMINI_API_KEY
+    # se usa esto en vez de Titan (Bedrock), que está en cuota 0.
+    gemini_embed_model: str = "gemini-embedding-001"
 
     # --- CORS (frontend web y móvil son separados) ---
     # NoDecode: evita que pydantic-settings intente parsear el valor como JSON,

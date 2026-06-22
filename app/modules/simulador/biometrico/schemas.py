@@ -31,6 +31,7 @@ class MetricaRead(BaseModel):
     ritmo_wpm: int | None
     pausas_largas_conteo: int
     contacto_visual_pct: Decimal | None
+    transcripcion_texto: str = ""  # texto reconocido (segmentos de audio); vacío en frames de video
     momento: datetime
     created_at: datetime
 

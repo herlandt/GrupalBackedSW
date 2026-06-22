@@ -138,29 +138,34 @@ class IntegracionService:
             coherencia_discurso_documento=round(coherencia, 3),
         )
 
-    async def _coherencia_documento(self, sesion: SesionSimulacion, discurso: str) -> float:
-        """Similitud (0..1) entre lo que el estudiante DIJO y su documento (similitud semántica).
+    async def _coherencia_documento(
+        self, sesion: SesionSimulacion, discurso: str
+    ) -> tuple[float, bool]:
+        """Similitud (0..1) entre lo que el estudiante DIJO y su documento, y si se MIDIÓ.
 
-        NEUTRO si no se captó voz (no se puede medir) o si el documento no está disponible; si
-        el servicio de análisis falla, también cae a neutro para no romper el cierre de la sesión.
+        Devuelve (valor, medida). `medida=False` cuando no se pudo medir (sin voz, sin
+        documento, o el análisis falla/agota tiempo —p. ej. embeddings sin cuota—): en ese
+        caso `valor` es NEUTRO (para no sesgar a la IA) pero NO debe mostrarse como puntaje
+        real, porque un balbuceo "sacaría" ese neutro (0.62 → 62) sin que se evaluara nada.
         """
         if not discurso:
-            return _neutro("coherencia_discurso_documento")
+            return _neutro("coherencia_discurso_documento"), False
         version = await self.versiones.get(sesion.version_documento_id)
         if version is None:
-            return _neutro("coherencia_discurso_documento")
+            return _neutro("coherencia_discurso_documento"), False
         try:
             # El cierre de la sesión NO debe colgarse esperando a AWS (throttling/red): si la
             # coherencia tarda demasiado, cae a NEUTRO (no se penaliza ni se bloquea el cierre).
             with anyio.fail_after(25):
-                return await self.analysis.coherencia_discurso(
+                valor = await self.analysis.coherencia_discurso(
                     archivo_url=version.archivo_url,
                     formato=version.formato.value,
                     discurso=discurso,
                 )
+            return valor, True
         except (AnalysisServiceError, TimeoutError) as exc:
             logger.warning("Coherencia discurso↔documento no medible, uso neutro: %s", exc)
-            return _neutro("coherencia_discurso_documento")
+            return _neutro("coherencia_discurso_documento"), False
 
     @staticmethod
     def _dominio_score(evaluaciones: Sequence[EvaluacionRespuesta]) -> Decimal | None:
@@ -190,7 +195,7 @@ class IntegracionService:
         # Coherencia de lo expuesto con el documento: concatena la transcripción de la sesión
         # y la compara semánticamente con la tesis. Neutro si no se captó voz.
         discurso = " ".join(m.transcripcion_texto for m in metricas if m.transcripcion_texto)
-        coherencia = await self._coherencia_documento(sesion, discurso.strip())
+        coherencia, coherencia_medida = await self._coherencia_documento(sesion, discurso.strip())
 
         features = self._features_defensa(sesion, metricas, coherencia)
         try:
@@ -204,7 +209,14 @@ class IntegracionService:
         no_verbal = Decimal(
             str(round((features.contacto_visual + features.estabilidad_postura) / 2 * 100, 2))
         )
-        coherencia_doc = Decimal(str(round(features.coherencia_discurso_documento * 100, 2)))
+        # Solo se MUESTRA si se midió de verdad; si fue imputado (neutro por falta de voz/
+        # documento o análisis no disponible) se deja en None ("no medible") para no presentar
+        # un 0.62→62 que parezca una evaluación real del discurso.
+        coherencia_doc = (
+            Decimal(str(round(features.coherencia_discurso_documento * 100, 2)))
+            if coherencia_medida
+            else None
+        )
         # Feedback ACCIONABLE: traduce los factores débiles a consejos con valor + objetivo.
         mejoras = rubrica.consejos("defensa", evaluacion.factores_a_reforzar, asdict(features))
         texto_mejora = "; ".join(mejoras) or "—"

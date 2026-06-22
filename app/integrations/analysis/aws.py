@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import anyio
 
+from app.core.config import settings
 from app.integrations.analysis.extraction import (
     SECCIONES_ESPERADAS,
     extraer_texto,
@@ -65,6 +66,16 @@ class AwsAnalysisService:
         fragmentos = _fragmentos_documento(texto)
         if not fragmentos:
             raise AnalysisServiceError("El documento no tiene fragmentos analizables")
+        # Preferimos embeddings de GEMINI (gratis) si hay clave: Titan/Bedrock está en cuota 0
+        # y, sin medir de verdad, la coherencia caía a un neutro engañoso (0.62 → 62).
+        if settings.gemini_api_keys:
+            from app.integrations.llm.gemini_embeddings import GeminiEmbedError, coherencia
+
+            try:
+                return coherencia(discurso, fragmentos)
+            except GeminiEmbedError as exc:
+                raise AnalysisServiceError(f"Coherencia (Gemini) no disponible: {exc}") from exc
+        # Sin clave Gemini: camino original con Titan (Bedrock) + fallback léxico.
         extractor = DocumentoFeatures(
             get_aws_client("comprehend"), get_aws_client("bedrock-runtime")
         )

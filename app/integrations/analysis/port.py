@@ -1,16 +1,14 @@
-"""Puertos de integración del análisis de documentos (contratos) + DTOs neutrales.
+"""Puerto de integración del análisis de documentos (contrato) + DTOs neutrales.
 
-- `AnalysisQueuePort`: encola la solicitud de análisis de una versión (SQS / stub).
 - `AnalysisServicePort`: pide el análisis al microservicio de IA de calificación y
   devuelve DTOs neutrales (sin dependencias del ORM).
+
+El disparo del análisis NO usa una cola: tras subir/versionar un documento, el router
+lanza `procesar_version` como tarea de fondo (post-commit). Ver `auditoria/router.py`.
 """
 
 from dataclasses import dataclass, field
 from typing import Protocol
-
-
-class AnalysisQueuePort(Protocol):
-    async def enqueue_analysis(self, *, documento_id: int, version_id: int) -> None: ...
 
 
 class AnalysisServiceError(Exception):
@@ -26,6 +24,14 @@ class ObservacionDTO:
 
 
 @dataclass
+class AlertaEticaDTO:
+    """Posible incumplimiento ético detectado en el documento (CU-12)."""
+
+    tipo: str  # p.ej. "INVESTIGACION_SERES_HUMANOS" | "EXPERIMENTACION_ANIMAL"
+    fragmento: str | None = None
+
+
+@dataclass
 class AnalisisResultadoDTO:
     nivel_documento: str  # "ALTO" | "MEDIO" | "BAJO"
     resumen: str | None = None
@@ -34,6 +40,8 @@ class AnalisisResultadoDTO:
     # acumular un corpus REAL con el que reentrenar a futuro (no solo sintéticos).
     features: dict[str, float] = field(default_factory=dict)
     revision_sugerida: bool = False  # caso de frontera: conviene revisión humana
+    # CU-12: alertas de ética detectadas durante el análisis (el motor las abre solo).
+    alertas_etica: list[AlertaEticaDTO] = field(default_factory=list)
 
 
 class AnalysisServicePort(Protocol):

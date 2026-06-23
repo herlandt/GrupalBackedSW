@@ -15,7 +15,11 @@ from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.database import engine
-from app.core.exceptions import BusinessRuleError, ResourceNotFoundError
+from app.core.exceptions import (
+    AuthenticationError,
+    BusinessRuleError,
+    ResourceNotFoundError,
+)
 from app.modules.administracion.router import router as administracion_router
 from app.modules.auditoria_documental.auditoria.service import reiniciar_analisis_huerfanos
 from app.modules.auditoria_documental.router import router as auditoria_documental_router
@@ -63,6 +67,16 @@ def handle_not_found(request: Request, exc: ResourceNotFoundError) -> JSONRespon
 @app.exception_handler(BusinessRuleError)
 def handle_business_rule(request: Request, exc: BusinessRuleError) -> JSONResponse:
     return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+@app.exception_handler(AuthenticationError)
+def handle_auth_error(request: Request, exc: AuthenticationError) -> JSONResponse:
+    # CU-01: credenciales inválidas -> 401 (no 409), con el reto estándar de Bearer.
+    return JSONResponse(
+        status_code=401,
+        content={"detail": str(exc)},
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 @app.get("/health", tags=["health"])

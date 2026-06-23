@@ -8,9 +8,11 @@ from openpyxl.styles import Font, PatternFill
 from openpyxl.worksheet.worksheet import Worksheet
 
 from app.modules.administracion.reportes.repository import (
+    BitacoraFilaData,
     GananciasData,
     PagoFilaData,
     PagoPorEstudianteData,
+    ProgresoEstudianteData,
 )
 
 _HEADER_FILL = PatternFill("solid", fgColor="0F172A")
@@ -58,4 +60,47 @@ def historial_usuario_excel(filas: Sequence[PagoFilaData]) -> bytes:
     _encabezado(ws, ["Fecha", "Monto", "Moneda", "Estado"])
     for f in filas:
         ws.append([f.fecha.strftime("%Y-%m-%d %H:%M"), float(f.monto), f.moneda, f.estado])
+    return _to_bytes(wb)
+
+
+def progreso_estudiantes_excel(filas: Sequence[ProgresoEstudianteData]) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Progreso"
+    _encabezado(
+        ws,
+        ["Estudiante", "Email", "# Documentos", "# Simulaciones", "Nivel doc.", "Nivel defensa",
+         "Nivel general"],
+    )
+    for f in filas:
+        ws.append(
+            [
+                f.nombre,
+                f.email,
+                f.total_documentos,
+                f.total_simulaciones,
+                f.nivel_documento or "—",
+                f.nivel_defensa or "—",
+                f.nivel_general,
+            ]
+        )
+    return _to_bytes(wb)
+
+
+def bitacora_excel(filas: Sequence[BitacoraFilaData]) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Bitácora"
+    _encabezado(ws, ["Fecha", "Actor", "Acción", "Entidad", "Entidad ID", "Detalle"])
+    for f in filas:
+        ws.append(
+            [
+                f.fecha.strftime("%Y-%m-%d %H:%M:%S"),
+                f.actor,
+                f.accion,
+                f.entidad,
+                f.entidad_id,
+                f.detalle,
+            ]
+        )
     return _to_bytes(wb)

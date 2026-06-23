@@ -1,11 +1,13 @@
 """Capa API del submódulo Pagos (CU-03 pago, CU-04 historial)."""
 
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.core.database import DbDep
+from app.core.enums import EstadoPago
 from app.integrations.email.port import EmailPort
 from app.integrations.factory import get_email_port, get_payment_gateway
 from app.integrations.payments.port import PaymentGatewayPort, WebhookVerificationError
@@ -67,5 +69,12 @@ async def mi_suscripcion(service: ServiceDep, user: RequireEstudiante) -> Suscri
 
 
 @router.get("/historial", response_model=list[PagoRead])
-async def historial(service: ServiceDep, user: RequireEstudiante) -> Sequence[Pago]:
-    return await service.historial(user)
+async def historial(
+    service: ServiceDep,
+    user: RequireEstudiante,
+    desde: datetime | None = None,
+    hasta: datetime | None = None,
+    estado: EstadoPago | None = None,
+) -> Sequence[Pago]:
+    """CU-04: historial del estudiante, filtrable por periodo (desde/hasta) y estado."""
+    return await service.historial(user, desde=desde, hasta=hasta, estado=estado)

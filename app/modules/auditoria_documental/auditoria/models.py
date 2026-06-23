@@ -21,6 +21,8 @@ class ResultadoAuditoria(Base, IdMixin, CreatedAtMixin):
     resumen: Mapped[str | None] = mapped_column(Text)
     # Features que alimentaron a la IA evaluadora (trazabilidad + futuro reentrenamiento).
     features: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # CU-09 / RF-09: comparación con la versión anterior (tendencia + deltas de features).
+    comparacion: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
 
 class Observacion(Base, IdMixin):

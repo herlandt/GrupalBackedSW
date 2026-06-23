@@ -41,6 +41,46 @@ async def test_admin_no_puede_pagar(
     assert r.status_code == 403
 
 
+async def test_historial_filtra_por_estado_cu04(
+    client: AsyncClient, admin_token: str, estudiante_token: str, db_session: AsyncSession
+) -> None:
+    # CU-04: el historial se filtra por estado (y por periodo con desde/hasta).
+    from decimal import Decimal
+
+    from sqlalchemy import select
+
+    from app.core.enums import EstadoPago
+    from app.modules.administracion.pagos.models import Pago
+    from app.modules.administracion.usuarios.models import Usuario
+
+    plan_id = await _crear_plan(client, admin_token)
+    user = (
+        await db_session.execute(select(Usuario).where(Usuario.email == "estu@example.com"))
+    ).scalar_one()
+    db_session.add_all(
+        [
+            Pago(
+                usuario_id=user.id, plan_id=plan_id, monto=Decimal("9.99"),
+                moneda="USD", estado=EstadoPago.PAGADO,
+            ),
+            Pago(
+                usuario_id=user.id, plan_id=plan_id, monto=Decimal("9.99"),
+                moneda="USD", estado=EstadoPago.FALLIDO,
+            ),
+        ]
+    )
+    await db_session.flush()
+
+    r = await client.get(
+        "/api/v1/pagos/historial?estado=PAGADO", headers=auth(estudiante_token)
+    )
+    assert r.status_code == 200
+    assert [p["estado"] for p in r.json()] == ["PAGADO"]
+
+    r = await client.get("/api/v1/pagos/historial", headers=auth(estudiante_token))
+    assert len(r.json()) == 2  # sin filtro: ambos pagos
+
+
 async def test_webhook_activa_suscripcion(
     client: AsyncClient, admin_token: str, estudiante_token: str, fake_gateway: FakePaymentGateway
 ) -> None:

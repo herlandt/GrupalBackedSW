@@ -36,15 +36,16 @@ async def iniciar_simulacion(
 
 
 @router.get("", response_model=list[SesionRead])
-async def listar_simulaciones(service: ServiceDep, user: RequireEstudiante) -> list[SesionRead]:
-    """CU-15: historial de mis sesiones (más recientes primero)."""
-    sesiones = await service.historial(user)
-    return [SesionRead.model_validate(s) for s in sesiones]
+async def listar_simulaciones(
+    service: ServiceDep, user: RequireEstudiante, _sub: SuscripcionActiva
+) -> list[SesionRead]:
+    """CU-15: historial de mis sesiones con su resultado general (más recientes primero)."""
+    return await service.historial(user)
 
 
 @router.get("/{sesion_id}", response_model=SesionRead)
 async def obtener_simulacion(
-    sesion_id: int, service: ServiceDep, user: RequireEstudiante
+    sesion_id: int, service: ServiceDep, user: RequireEstudiante, _sub: SuscripcionActiva
 ) -> SesionRead:
     """CU-15: detalle de una sesión propia (404 si es ajena)."""
     sesion = await service.obtener(sesion_id, user)
@@ -53,7 +54,7 @@ async def obtener_simulacion(
 
 @router.post("/{sesion_id}/finalizar", response_model=SesionRead)
 async def finalizar_simulacion(
-    sesion_id: int, service: ServiceDep, user: RequireEstudiante
+    sesion_id: int, service: ServiceDep, user: RequireEstudiante, _sub: SuscripcionActiva
 ) -> SesionRead:
     """CU-13: cierra la sesión -> FINALIZADA (fija fecha_fin)."""
     sesion = await service.finalizar(sesion_id, user)
@@ -62,7 +63,7 @@ async def finalizar_simulacion(
 
 @router.post("/{sesion_id}/cancelar", response_model=SesionRead)
 async def cancelar_simulacion(
-    sesion_id: int, service: ServiceDep, user: RequireEstudiante
+    sesion_id: int, service: ServiceDep, user: RequireEstudiante, _sub: SuscripcionActiva
 ) -> SesionRead:
     """CU-13: aborta la sesión -> CANCELADA (fija fecha_fin)."""
     sesion = await service.cancelar(sesion_id, user)

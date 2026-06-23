@@ -1,26 +1,14 @@
-"""Adaptadores stub de análisis para desarrollo/test.
+"""Adaptador stub de análisis para desarrollo/test.
 
-- `StubAnalysisQueue`: registra (log) el encolado sin SQS real.
 - `StubAnalysisService`: devuelve un ResultadoAuditoria de ejemplo (coherencia + normas +
   sugerencia) sin llamar al microservicio real. El adaptador HTTP real se conecta por entorno.
 """
-
-import logging
 
 from app.integrations.analysis.port import (
     AnalisisResultadoDTO,
     AnalysisServicePort,
     ObservacionDTO,
 )
-
-logger = logging.getLogger(__name__)
-
-
-class StubAnalysisQueue:
-    async def enqueue_analysis(self, *, documento_id: int, version_id: int) -> None:
-        logger.info(
-            "Análisis encolado (stub): documento=%s version=%s", documento_id, version_id
-        )
 
 
 class StubAnalysisService(AnalysisServicePort):

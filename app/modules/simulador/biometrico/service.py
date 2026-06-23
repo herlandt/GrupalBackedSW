@@ -33,6 +33,34 @@ def _dec(valor: float | None) -> Decimal | None:
     return Decimal(str(valor)) if valor is not None else None
 
 
+def _sugerencia_en_vivo(datos: dict[str, Any]) -> str | None:
+    """CU-14: consejo accionable a partir de las métricas acumuladas (None si no hay datos).
+
+    Prioriza el "mayor fallo" del momento: contacto visual, silencios, muletillas, ritmo,
+    postura. El front la muestra en pantalla y la refresca cada 45-90 s.
+    """
+    if not datos.get("intervalos"):
+        return None  # métricas insuficientes: el sistema espera (excepción de la ficha)
+    contacto = datos.get("contacto_visual_pct_promedio")
+    postura = datos.get("postura_score_promedio")
+    wpm = datos.get("ritmo_wpm_promedio")
+    muletillas = datos.get("muletillas_total") or 0
+    pausas = datos.get("pausas_total") or 0
+    if contacto is not None and float(contacto) < 50:
+        return "Mantén más contacto visual con el tribunal."
+    if pausas >= 3:
+        return "Evita los silencios largos: enlaza tus ideas con conectores."
+    if muletillas >= 5:
+        return 'Reduce las muletillas ("este", "o sea"): haz una pausa breve en su lugar.'
+    if wpm is not None and wpm > 160:
+        return "Baja un poco el ritmo del habla para que se te siga mejor."
+    if wpm is not None and 0 < wpm < 90:
+        return "Sube un poco el ritmo: habla con más fluidez."
+    if postura is not None and float(postura) < 50:
+        return "Corrige la postura: mantente erguido y de frente."
+    return "Vas bien: mantén el ritmo y el contacto visual."
+
+
 class BiometricoService:
     def __init__(self, db: AsyncSession, biometric: BiometricServicePort) -> None:
         self.db = db
@@ -167,4 +195,4 @@ class BiometricoService:
     async def resumen(self, sesion_id: int, usuario: Usuario) -> dict[str, Any]:
         await self._sesion_del_usuario(sesion_id, usuario)
         datos = await self.metricas.resumen(sesion_id)
-        return {"sesion_id": sesion_id, **datos}
+        return {"sesion_id": sesion_id, "sugerencia": _sugerencia_en_vivo(datos), **datos}

@@ -151,5 +151,14 @@ class PagoService:
     async def mi_suscripcion(self, usuario: Usuario) -> Suscripcion | None:
         return await self.suscripciones.activa_de_usuario(usuario.id)
 
-    async def historial(self, usuario: Usuario) -> Sequence[Pago]:
-        return await self.pagos.por_usuario(usuario.id)
+    async def historial(
+        self,
+        usuario: Usuario,
+        *,
+        desde: datetime | None = None,
+        hasta: datetime | None = None,
+        estado: EstadoPago | None = None,
+    ) -> Sequence[Pago]:
+        return await self.pagos.por_usuario(
+            usuario.id, desde=desde, hasta=hasta, estado=estado
+        )

@@ -1,5 +1,6 @@
 """Capa API del submódulo Reportes (CU-05 admin + export CU-04 estudiante)."""
 
+from datetime import datetime
 from io import BytesIO
 from typing import Annotated, Literal
 
@@ -49,6 +50,26 @@ async def reporte_pagos_por_estudiante(
     service: ServiceDep, admin: RequireAdmin, formato: Formato = "pdf"
 ) -> StreamingResponse:
     return _descarga(await service.pagos_por_estudiante(admin, formato))
+
+
+@router.get("/progreso-estudiantes")
+async def reporte_progreso_estudiantes(
+    service: ServiceDep, admin: RequireAdmin, formato: Formato = "pdf"
+) -> StreamingResponse:
+    """CU-05: progreso de los estudiantes (# documentos, # simulaciones, nivel) en PDF/Excel."""
+    return _descarga(await service.progreso_estudiantes(admin, formato))
+
+
+@router.get("/bitacora")
+async def reporte_bitacora(
+    service: ServiceDep,
+    admin: RequireAdmin,
+    formato: Formato = "pdf",
+    desde: datetime | None = None,
+    hasta: datetime | None = None,
+) -> StreamingResponse:
+    """Reporte de la bitácora/auditoría (admin). `desde`/`hasta` (ISO) acotan el periodo."""
+    return _descarga(await service.bitacora(admin, formato, desde=desde, hasta=hasta))
 
 
 @router.get("/mi-historial/export")

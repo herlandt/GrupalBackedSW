@@ -1,8 +1,10 @@
 """Capa API del submódulo Monitoreo (CU-07 monitoreo, RF-08 avance formal). Admin."""
 
+from io import BytesIO
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, status
+from fastapi.responses import StreamingResponse
 
 from app.core.database import DbDep
 from app.modules.administracion.monitoreo.schemas import (
@@ -34,6 +36,19 @@ async def detalle_estudiante(
     usuario_id: int, service: ServiceDep, admin: RequireAdmin
 ) -> EstudianteDetalle:
     return await service.detalle_estudiante(usuario_id, admin.id)
+
+
+@router.get("/estudiantes/{usuario_id}/export")
+async def exportar_estudiante(
+    usuario_id: int, service: ServiceDep, admin: RequireAdmin
+) -> StreamingResponse:
+    """CU-07: descarga el reporte PDF del estudiante seleccionado."""
+    contenido, filename = await service.exportar_estudiante(usuario_id, admin.id)
+    return StreamingResponse(
+        BytesIO(contenido),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/estudiantes/{usuario_id}/avances", response_model=list[AvanceFormalRead])

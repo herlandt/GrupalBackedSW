@@ -48,6 +48,13 @@ async def login(
     return Token(access_token=access_token)
 
 
+@router.post("/auth/logout")
+async def logout(user: CurrentUser, service: ServiceDep) -> dict[str, str]:
+    """CU-01: cierra la sesión (registra el evento; el cliente descarta el token)."""
+    await service.logout(user)
+    return {"detail": "Sesión cerrada."}
+
+
 @router.get("/usuarios/me", response_model=UsuarioRead)
 async def get_me(user: CurrentUser) -> Usuario:
     return user

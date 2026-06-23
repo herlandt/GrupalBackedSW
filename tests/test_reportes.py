@@ -27,6 +27,33 @@ async def _plan_y_pago(client: AsyncClient, admin_token: str, estudiante_token: 
     )
 
 
+async def test_reporte_progreso_estudiantes_admin_pdf(
+    client: AsyncClient, admin_token: str, estudiante_token: str
+) -> None:
+    # CU-05: el reporte de progreso de estudiantes existe y se descarga (PDF/Excel).
+    assert estudiante_token  # registra un estudiante para que aparezca en el reporte
+    r = await client.get(
+        "/api/v1/reportes/progreso-estudiantes?formato=pdf", headers=auth(admin_token)
+    )
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"] == "application/pdf"
+
+    r = await client.get(
+        "/api/v1/reportes/progreso-estudiantes?formato=excel", headers=auth(admin_token)
+    )
+    assert r.status_code == 200
+    assert "spreadsheet" in r.headers["content-type"]
+
+
+async def test_reporte_progreso_estudiantes_requiere_admin(
+    client: AsyncClient, estudiante_token: str
+) -> None:
+    r = await client.get(
+        "/api/v1/reportes/progreso-estudiantes", headers=auth(estudiante_token)
+    )
+    assert r.status_code == 403
+
+
 async def test_reporte_requiere_admin(client: AsyncClient, estudiante_token: str) -> None:
     # Sin token -> 401
     r = await client.get("/api/v1/reportes/ganancias")
@@ -69,6 +96,45 @@ async def test_pagos_por_estudiante_excel(
     r = await client.get(
         "/api/v1/reportes/pagos-por-estudiante",
         params={"formato": "excel"},
+        headers=auth(admin_token),
+    )
+    assert r.status_code == 200
+    assert r.content[:2] == b"PK"  # .xlsx es un zip
+
+
+async def test_bitacora_requiere_admin(client: AsyncClient, estudiante_token: str) -> None:
+    r = await client.get("/api/v1/reportes/bitacora")
+    assert r.status_code == 401
+    r = await client.get("/api/v1/reportes/bitacora", headers=auth(estudiante_token))
+    assert r.status_code == 403
+
+
+async def test_bitacora_pdf(
+    client: AsyncClient,
+    admin_token: str,
+    estudiante_token: str,
+    fake_gateway: FakePaymentGateway,
+) -> None:
+    # _plan_y_pago genera varios eventos en la bitácora (plan, checkout, pago).
+    await _plan_y_pago(client, admin_token, estudiante_token)
+    r = await client.get(
+        "/api/v1/reportes/bitacora", params={"formato": "pdf"}, headers=auth(admin_token)
+    )
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/pdf"
+    assert r.content[:4] == b"%PDF"
+
+
+async def test_bitacora_excel_con_fechas(
+    client: AsyncClient,
+    admin_token: str,
+    estudiante_token: str,
+    fake_gateway: FakePaymentGateway,
+) -> None:
+    await _plan_y_pago(client, admin_token, estudiante_token)
+    r = await client.get(
+        "/api/v1/reportes/bitacora",
+        params={"formato": "excel", "desde": "2020-01-01T00:00:00"},
         headers=auth(admin_token),
     )
     assert r.status_code == 200

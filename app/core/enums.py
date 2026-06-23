@@ -58,6 +58,14 @@ class EstadoAlertaEtica(StrEnum):
     DESESTIMADA = "DESESTIMADA"
 
 
+class EstadoEticaTesis(StrEnum):
+    """Estado ético de la tesis (CU-12): se actualiza al abrir/resolver alertas."""
+
+    LIMPIO = "LIMPIO"  # sin alertas pendientes ni confirmadas
+    EN_REVISION = "EN_REVISION"  # hay una alerta pendiente por gestionar
+    OBSERVADA = "OBSERVADA"  # el administrador confirmó un incumplimiento
+
+
 class NivelDificultad(StrEnum):
     EXPLORACION = "EXPLORACION"
     ESTANDAR = "ESTANDAR"

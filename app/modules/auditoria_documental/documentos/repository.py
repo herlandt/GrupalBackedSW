@@ -31,6 +31,21 @@ class VersionRepository(BaseRepository[VersionDocumento]):
         )
         return result.scalars().all()
 
+    async def version_anterior(
+        self, documento_id: int, numero_version: int
+    ) -> VersionDocumento | None:
+        """La versión inmediatamente anterior (mayor numero < numero_version), o None."""
+        result = await self.db.execute(
+            select(VersionDocumento)
+            .where(
+                VersionDocumento.documento_id == documento_id,
+                VersionDocumento.numero_version < numero_version,
+            )
+            .order_by(VersionDocumento.numero_version.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def ultimo_numero(self, documento_id: int) -> int:
         """Devuelve el mayor numero_version del documento (0 si no hay ninguna)."""
         result = await self.db.execute(

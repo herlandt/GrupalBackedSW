@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit.service import AuditService
 from app.integrations.email.port import EmailPort
+from app.modules.administracion.notificaciones.models import NotificacionUsuario
 from app.modules.administracion.suscripciones.models import PlanSuscripcion
 from app.modules.administracion.suscripciones.repository import (
     PlanRepository,
@@ -77,15 +78,20 @@ class SuscripcionService:
         return plan
 
     async def _notificar_cambio_tarifa(self, plan: PlanSuscripcion) -> None:
-        """Avisa por correo a los usuarios con una suscripción activa a este plan."""
+        """Avisa a los usuarios con suscripción activa por DOS canales (CU-02 postcond.):
+        correo y notificación EN EL SISTEMA (in-app)."""
+        cuerpo = (
+            f"La tarifa de tu plan '{plan.nombre}' cambió a {plan.precio} {plan.moneda}."
+        )
         for suscripcion in await self.suscripciones.activas_por_plan(plan.id):
             usuario = await self.usuarios.get(suscripcion.usuario_id)
             if usuario is not None:
                 await self.email.send(
-                    to=usuario.email,
-                    subject="Cambio de tarifa — TesisGuard",
-                    body=(
-                        f"La tarifa de tu plan '{plan.nombre}' cambió a "
-                        f"{plan.precio} {plan.moneda}."
-                    ),
+                    to=usuario.email, subject="Cambio de tarifa — TesisGuard", body=cuerpo
                 )
+                self.db.add(
+                    NotificacionUsuario(
+                        usuario_id=usuario.id, titulo="Cambio de tarifa de tu plan", cuerpo=cuerpo
+                    )
+                )
+        await self.db.flush()

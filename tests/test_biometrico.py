@@ -118,6 +118,7 @@ async def test_segmento_y_resumen_cu14(
         assert r.status_code == 200
         assert r.json()["intervalos"] == 1
         assert r.json()["muletillas_total"] == 2
+        assert r.json()["sugerencia"]  # CU-14: sugerencia en vivo tras acumular datos
 
         r = await client.get(
             f"/api/v1/biometrico/sesiones/{sesion_id}/metricas", headers=auth(estudiante_token)
@@ -126,6 +127,25 @@ async def test_segmento_y_resumen_cu14(
         assert len(r.json()) == 1
     finally:
         app.dependency_overrides.pop(get_biometric_service, None)
+
+
+def test_sugerencia_en_vivo_cu14() -> None:
+    from app.modules.simulador.biometrico.service import _sugerencia_en_vivo
+
+    # Sin datos: el sistema espera (no sugiere todavía).
+    assert _sugerencia_en_vivo({"intervalos": 0}) is None
+    # Prioriza el mayor fallo: poco contacto visual.
+    s = _sugerencia_en_vivo(
+        {
+            "intervalos": 3,
+            "contacto_visual_pct_promedio": Decimal("30"),
+            "postura_score_promedio": Decimal("80"),
+            "muletillas_total": 0,
+            "pausas_total": 0,
+            "ritmo_wpm_promedio": 120,
+        }
+    )
+    assert s is not None and "contacto visual" in s.lower()
 
 
 async def test_sin_token_401(client: AsyncClient) -> None:

@@ -13,7 +13,8 @@ from app.core.enums import CategoriaObservacion, EstadoAnalisis
 from app.core.exceptions import BusinessRuleError, ResourceNotFoundError
 from app.core.internal_auth import RequireInternalToken
 from app.integrations.analysis.port import AnalysisServiceError, AnalysisServicePort
-from app.integrations.factory import get_analysis_service
+from app.integrations.email.port import EmailPort
+from app.integrations.factory import get_analysis_service, get_email_port
 from app.modules.administracion.suscripciones.dependencies import SuscripcionActiva
 from app.modules.administracion.usuarios.dependencies import RequireEstudiante
 from app.modules.auditoria_documental.auditoria.schemas import (
@@ -22,6 +23,7 @@ from app.modules.auditoria_documental.auditoria.schemas import (
     ResultadoRead,
 )
 from app.modules.auditoria_documental.auditoria.service import AuditoriaService
+from app.modules.auditoria_documental.etica.service import EticaService
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +38,10 @@ async def _procesar_en_segundo_plano(version_id: int) -> None:
     """
     logger.info("Análisis 2º plano: inicio (versión %s)", version_id)
     async with SessionLocal() as db:
-        service = AuditoriaService(db, get_analysis_service())
+        # CU-12: el worker abre por sí mismo las alertas de ética detectadas (notifica por
+        # correo); por eso lleva un EticaService con el puerto de email real.
+        etica = EticaService(db, get_email_port())
+        service = AuditoriaService(db, get_analysis_service(), etica)
         try:
             await service.procesar_version(version_id)
             await db.commit()
@@ -66,8 +71,9 @@ def _encolar_procesamiento(version_id: int) -> None:
 def get_auditoria_service(
     db: DbDep,
     analysis: Annotated[AnalysisServicePort, Depends(get_analysis_service)],
+    email: Annotated[EmailPort, Depends(get_email_port)],
 ) -> AuditoriaService:
-    return AuditoriaService(db, analysis)
+    return AuditoriaService(db, analysis, EticaService(db, email))
 
 
 ServiceDep = Annotated[AuditoriaService, Depends(get_auditoria_service)]
@@ -96,6 +102,7 @@ async def obtener_resultado(
         version_id=resultado.version_id,
         nivel_documento=resultado.nivel_documento,
         resumen=resultado.resumen,
+        comparacion=resultado.comparacion,
         created_at=resultado.created_at,
         observaciones=[ObservacionRead.model_validate(o) for o in observaciones],
     )

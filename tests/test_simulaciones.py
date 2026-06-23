@@ -94,10 +94,11 @@ async def test_iniciar_finalizar_e_historial(
     )
     assert r.status_code == 409
 
-    # CU-15: historial
+    # CU-15: historial (incluye el resultado general; None hasta que haya evaluación)
     r = await client.get("/api/v1/simulaciones", headers=auth(estudiante_token))
     assert r.status_code == 200
     assert [s["id"] for s in r.json()] == [sesion_id]
+    assert r.json()[0]["nivel_defensa"] is None
 
     # CU-15: detalle
     r = await client.get(f"/api/v1/simulaciones/{sesion_id}", headers=auth(estudiante_token))
@@ -159,6 +160,14 @@ async def test_iniciar_sin_suscripcion_402(
     assert r.status_code == 402
 
 
+async def test_historial_sin_suscripcion_402(
+    client: AsyncClient, estudiante_token: str
+) -> None:
+    # CU-15: el historial también exige suscripción activa (igual que el resto del simulador).
+    r = await client.get("/api/v1/simulaciones", headers=auth(estudiante_token))
+    assert r.status_code == 402
+
+
 async def test_iniciar_admin_403(
     client: AsyncClient, admin_token: str, db_session: AsyncSession
 ) -> None:
@@ -185,6 +194,10 @@ async def test_ver_sesion_ajena_404(
         headers=auth(estudiante_token),
     )
     sesion_id = r.json()["id"]
+
+    # El estudiante 2 también está suscrito (para probar el IDOR, no el gating 402).
+    estu2 = await _usuario_por_email(db_session, "estu2@example.com")
+    await _suscribir(db_session, estu2.id)
 
     # El estudiante 2 NO puede ver ni cerrar la sesión del estudiante 1.
     r = await client.get(f"/api/v1/simulaciones/{sesion_id}", headers=auth(estudiante2_token))

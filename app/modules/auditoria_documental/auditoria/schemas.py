@@ -1,6 +1,7 @@
 """Esquemas Pydantic — submódulo auditoria (CU-10, RF-01, RF-02)."""
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -24,6 +25,7 @@ class ResultadoRead(BaseModel):
     version_id: int
     nivel_documento: NivelPreparacion
     resumen: str | None
+    comparacion: dict[str, Any] | None = None
     created_at: datetime
     observaciones: list[ObservacionRead]
 

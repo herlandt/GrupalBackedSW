@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.audit.service import AuditService
 from app.core.config import settings
 from app.core.enums import RolUsuario
-from app.core.exceptions import BusinessRuleError
+from app.core.exceptions import AuthenticationError, BusinessRuleError
 from app.core.security import create_access_token, hash_password, verify_password
 from app.integrations.email.port import EmailPort
 from app.integrations.storage.port import StoragePort
@@ -57,15 +57,25 @@ class UsuarioService:
     async def authenticate(self, email: str, password: str) -> str:
         user = await self.users.get_by_email(email)
         if user is None or not user.activo or not verify_password(password, user.password_hash):
-            raise BusinessRuleError("Credenciales inválidas")
+            # CU-01: fallo de autenticación -> 401 (no 409).
+            raise AuthenticationError("Credenciales inválidas")
         await self.audit.log(
             actor_id=user.id, accion="USER_LOGIN", entidad="usuario", entidad_id=user.id
         )
         return create_access_token(str(user.id))
 
+    async def logout(self, user: Usuario) -> None:
+        """CU-01: cierre de sesión. Con JWT stateless el token se descarta en el cliente;
+        aquí se registra el evento en la bitácora (postcondición del CU)."""
+        await self.audit.log(
+            actor_id=user.id, accion="USER_LOGOUT", entidad="usuario", entidad_id=user.id
+        )
+
     async def update_profile(self, user: Usuario, data: UsuarioUpdate) -> Usuario:
         if data.nombre is not None:
             user.nombre = data.nombre
+        if data.preferencias is not None:
+            user.preferencias = data.preferencias
         await self.db.flush()
         await self.audit.log(
             actor_id=user.id, accion="PROFILE_UPDATED", entidad="usuario", entidad_id=user.id
@@ -80,6 +90,13 @@ class UsuarioService:
             key=key, data=content, content_type=content_type
         )
         await self.db.flush()
+        # CU-01 (postcondición): el cambio de foto también es una actualización de cuenta.
+        await self.audit.log(
+            actor_id=user.id,
+            accion="PROFILE_PHOTO_UPDATED",
+            entidad="usuario",
+            entidad_id=user.id,
+        )
         return user
 
     async def request_reset(self, email: str) -> None:

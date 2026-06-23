@@ -6,6 +6,7 @@ del paquete para no provocar imports circulares con `app.models.base`.
 
 from app.core.audit.models import Bitacora
 from app.modules.administracion.monitoreo.models import AvanceFormal
+from app.modules.administracion.notificaciones.models import NotificacionUsuario
 from app.modules.administracion.pagos.models import EventoWebhook, Pago
 from app.modules.administracion.suscripciones.models import PlanSuscripcion, Suscripcion
 from app.modules.administracion.usuarios.models import TokenResetPassword, Usuario
@@ -29,6 +30,7 @@ __all__ = [
     "EvaluacionRespuesta",
     "EventoWebhook",
     "MetricaBiometrica",
+    "NotificacionUsuario",
     "Observacion",
     "Pago",
     "PlanSuscripcion",

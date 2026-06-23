@@ -15,3 +15,7 @@ class ResourceNotFoundError(DomainError):
 
 class BusinessRuleError(DomainError):
     """Se violó una regla de negocio."""
+
+
+class AuthenticationError(DomainError):
+    """Falló la autenticación (credenciales inválidas). La API la traduce a 401."""

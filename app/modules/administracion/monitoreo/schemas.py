@@ -4,7 +4,13 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.core.enums import EstadoAvance, NivelPreparacion
+from app.core.enums import (
+    EstadoAnalisis,
+    EstadoAvance,
+    EstadoSesion,
+    NivelDificultad,
+    NivelPreparacion,
+)
 
 
 class EstudianteResumen(BaseModel):
@@ -36,9 +42,33 @@ class AvanceFormalCreate(BaseModel):
     etapa: str = Field(min_length=1, max_length=120)
 
 
+class SesionResumen(BaseModel):
+    """Fila del historial de simulaciones del estudiante (CU-07)."""
+
+    id: int
+    fecha_inicio: datetime
+    nivel_dificultad: NivelDificultad
+    estado: EstadoSesion
+    nivel_defensa: NivelPreparacion | None = None
+
+
+class VersionResumen(BaseModel):
+    """Fila del historial de versiones del documento, con su retroalimentación (CU-07)."""
+
+    id: int
+    numero_version: int
+    estado_analisis: EstadoAnalisis
+    nivel_documento: NivelPreparacion | None = None
+    resumen: str | None = None
+    created_at: datetime
+
+
 class EstudianteDetalle(BaseModel):
-    """Detalle de un estudiante: resumen + avances formales (CU-07)."""
+    """Detalle del estudiante (CU-07): resumen, nivel, historial de simulaciones,
+    versiones del documento (con retroalimentación) y avances formales."""
 
     estudiante: EstudianteResumen
     nivel_general: NivelPreparacion
+    simulaciones: list[SesionResumen] = Field(default_factory=list)
+    versiones: list[VersionResumen] = Field(default_factory=list)
     avances: list[AvanceFormalRead]

@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Self
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class PreguntaRead(BaseModel):
@@ -22,6 +22,9 @@ class RespuestaCreate(BaseModel):
 
     texto: str | None = None
     audio_url: str | None = None
+    # Contacto visual promedio (0-1) durante la respuesta, medido por cámara (Rekognition).
+    # None = no se midió (cámara desactivada) -> no penaliza la nota.
+    atencion: float | None = Field(default=None, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
     def _al_menos_uno(self) -> Self:

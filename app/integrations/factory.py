@@ -7,8 +7,8 @@ Se inyectan en los services con `Depends(...)` y se sustituyen en tests con
 from functools import lru_cache
 
 from app.core.config import settings
-from app.integrations.analysis.port import AnalysisQueuePort, AnalysisServicePort
-from app.integrations.analysis.stub import StubAnalysisQueue, StubAnalysisService
+from app.integrations.analysis.port import AnalysisServicePort
+from app.integrations.analysis.stub import StubAnalysisService
 from app.integrations.biometric.port import BiometricServicePort
 from app.integrations.biometric.stub import StubBiometricService
 from app.integrations.email.console import ConsoleEmail
@@ -21,6 +21,10 @@ from app.integrations.payments.port import PaymentGatewayPort
 from app.integrations.payments.stripe_gateway import StripeGateway
 from app.integrations.storage.local import LocalStorage
 from app.integrations.storage.port import StoragePort
+from app.integrations.transcription.port import TranscriptionPort
+from app.integrations.transcription.stub import StubTranscription
+from app.integrations.tts.port import TTSPort
+from app.integrations.tts.stub import StubTTS
 
 
 @lru_cache
@@ -38,12 +42,6 @@ def get_storage_port() -> StoragePort:
 @lru_cache
 def get_payment_gateway() -> PaymentGatewayPort:
     return StripeGateway()
-
-
-@lru_cache
-def get_analysis_queue() -> AnalysisQueuePort:
-    # En producción se conectará el adaptador SQS (settings).
-    return StubAnalysisQueue()
 
 
 @lru_cache
@@ -77,6 +75,26 @@ def get_tribunal_llm() -> TribunalLLMPort:
 
         return DocumentoTribunal()
     return StubTribunalLLM()
+
+
+@lru_cache
+def get_tts() -> TTSPort:
+    # "aws": Amazon Polly (voz neural ES) para el tribunal por voz; "stub" en dev/tests.
+    if settings.tts_backend == "aws":
+        from app.integrations.tts.aws import AwsPolly
+
+        return AwsPolly()
+    return StubTTS()
+
+
+@lru_cache
+def get_transcription() -> TranscriptionPort:
+    # "aws": AWS Transcribe batch (respaldo del tribunal por voz, CU-16); "stub" en dev/tests.
+    if settings.transcription_backend == "aws":
+        from app.integrations.transcription.aws import AwsTranscription
+
+        return AwsTranscription()
+    return StubTranscription()
 
 
 @lru_cache

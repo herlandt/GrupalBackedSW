@@ -2,18 +2,20 @@
 
 from collections.abc import Sequence
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit.service import AuditService
 from app.core.enums import EstadoAnalisis, FormatoDocumento
 from app.core.exceptions import BusinessRuleError, ResourceNotFoundError
-from app.integrations.analysis.port import AnalysisQueuePort
 from app.integrations.storage.port import StoragePort
+from app.modules.auditoria_documental.auditoria.models import ResultadoAuditoria
 from app.modules.auditoria_documental.documentos.models import Documento, VersionDocumento
 from app.modules.auditoria_documental.documentos.repository import (
     DocumentoRepository,
     VersionRepository,
 )
+from app.modules.auditoria_documental.documentos.schemas import VersionRead
 
 # 20 MB. Límite defensivo (también conviene limitarlo en el proxy/servidor).
 MAX_TAMANO_BYTES = 20 * 1024 * 1024
@@ -44,20 +46,21 @@ def _detectar_formato(filename: str, content_type: str) -> FormatoDocumento:
 
 
 class DocumentoService:
-    def __init__(
-        self, db: AsyncSession, storage: StoragePort, queue: AnalysisQueuePort
-    ) -> None:
+    def __init__(self, db: AsyncSession, storage: StoragePort) -> None:
         self.db = db
         self.documentos = DocumentoRepository(db)
         self.versiones = VersionRepository(db)
         self.audit = AuditService(db)
         self.storage = storage
-        self.queue = queue
 
     async def subir_documento(
         self, *, usuario_id: int, titulo: str, filename: str, content: bytes, content_type: str
     ) -> VersionDocumento:
-        """CU-08: crea Documento + VersionDocumento(numero_version=1) y encola el análisis."""
+        """CU-08: crea Documento + VersionDocumento(numero_version=1).
+
+        La versión nace EN_PROCESO; el router lanza el análisis en segundo plano
+        (post-commit) para cumplir la postcondición "se inicia automáticamente".
+        """
         formato = _detectar_formato(filename, content_type)
         self._validar_tamano(content)
 
@@ -78,7 +81,10 @@ class DocumentoService:
         self, *, usuario_id: int, documento_id: int, filename: str,
         content: bytes, content_type: str,
     ) -> VersionDocumento:
-        """CU-09: incrementa numero_version sobre un documento del usuario y encola."""
+        """CU-09: incrementa numero_version sobre un documento del usuario.
+
+        La nueva versión nace EN_PROCESO; el router lanza el análisis en segundo plano.
+        """
         documento = await self.documentos.get_or_404(documento_id)
         if documento.usuario_id != usuario_id:
             raise ResourceNotFoundError(f"Documento {documento_id} no existe")
@@ -102,12 +108,31 @@ class DocumentoService:
 
     async def historial_versiones(
         self, *, usuario_id: int, documento_id: int
-    ) -> Sequence[VersionDocumento]:
-        """CU-11: versiones de un documento (validando que sea del usuario)."""
+    ) -> list[VersionRead]:
+        """CU-11: versiones del documento con fecha, estado y RESUMEN del análisis."""
         documento = await self.documentos.get_or_404(documento_id)
         if documento.usuario_id != usuario_id:
             raise ResourceNotFoundError(f"Documento {documento_id} no existe")
-        return await self.versiones.por_documento(documento_id)
+        stmt = (
+            select(VersionDocumento, ResultadoAuditoria.nivel_documento, ResultadoAuditoria.resumen)
+            .outerjoin(ResultadoAuditoria, ResultadoAuditoria.version_id == VersionDocumento.id)
+            .where(VersionDocumento.documento_id == documento_id)
+            .order_by(VersionDocumento.numero_version.desc())
+        )
+        return [
+            VersionRead(
+                id=v.id,
+                documento_id=v.documento_id,
+                numero_version=v.numero_version,
+                archivo_url=v.archivo_url,
+                formato=v.formato,
+                estado_analisis=v.estado_analisis,
+                nivel_documento=nivel,
+                resumen=resumen,
+                created_at=v.created_at,
+            )
+            for v, nivel, resumen in (await self.db.execute(stmt)).all()
+        ]
 
     # -- internos --
 
@@ -128,8 +153,7 @@ class DocumentoService:
             numero_version=numero,
             archivo_url=url,
             formato=formato,
-            estado_analisis=EstadoAnalisis.PENDIENTE,
+            estado_analisis=EstadoAnalisis.EN_PROCESO,
         )
         await self.versiones.add(version)  # flush -> version.id
-        await self.queue.enqueue_analysis(documento_id=documento.id, version_id=version.id)
         return version

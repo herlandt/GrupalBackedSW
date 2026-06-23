@@ -16,13 +16,14 @@ from app.core.enums import (
     FormatoDocumento,
     NivelDificultad,
 )
-from app.integrations.factory import get_tribunal_llm
+from app.integrations.factory import get_transcription, get_tribunal_llm
 from app.integrations.llm.port import EvaluacionDTO, PreguntaGeneradaDTO
 from app.main import app
 from app.modules.administracion.suscripciones.models import PlanSuscripcion, Suscripcion
 from app.modules.administracion.usuarios.models import Usuario
 from app.modules.auditoria_documental.documentos.models import Documento, VersionDocumento
 from app.modules.simulador.simulaciones.models import SesionSimulacion
+from app.modules.simulador.tribunal.models import RespuestaEstudiante
 
 
 def auth(token: str) -> dict[str, str]:
@@ -148,6 +149,159 @@ async def test_happy_path_genera_responde_evalua(
         headers=auth(estudiante_token),
     )
     assert r.status_code == 409
+
+
+async def test_voz_pregunta_devuelve_audio(
+    client: AsyncClient, estudiante_token: str, db_session: AsyncSession, fake_llm: None
+) -> None:
+    sesion_id = await _crear_sesion(db_session, "estu@example.com")
+    r = await client.post(
+        f"/api/v1/tribunal/sesiones/{sesion_id}/preguntas", headers=auth(estudiante_token)
+    )
+    pregunta_id = r.json()[0]["id"]
+
+    # CU-16 (voz): el endpoint devuelve audio (en tests, el StubTTS da bytes fijos).
+    r = await client.get(
+        f"/api/v1/tribunal/preguntas/{pregunta_id}/voz", headers=auth(estudiante_token)
+    )
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"] == "audio/mpeg"
+    assert r.content == b"STUB_TTS_AUDIO"
+
+    # 404: pregunta inexistente (o ajena) no revela existencia.
+    r = await client.get(
+        "/api/v1/tribunal/preguntas/999999/voz", headers=auth(estudiante_token)
+    )
+    assert r.status_code == 404
+
+
+async def test_atencion_penaliza_puntuacion(
+    client: AsyncClient, estudiante_token: str, db_session: AsyncSession, fake_llm: None
+) -> None:
+    sesion_id = await _crear_sesion(db_session, "estu@example.com")
+    r = await client.post(
+        f"/api/v1/tribunal/sesiones/{sesion_id}/preguntas", headers=auth(estudiante_token)
+    )
+    pid = r.json()[0]["id"]
+
+    # atencion=0 (miró a otro lado) penaliza: 8.5 * (0.6 + 0.4*0) = 5.10 y añade observación.
+    r = await client.post(
+        f"/api/v1/tribunal/preguntas/{pid}/respuesta",
+        json={"texto": "respuesta razonada", "atencion": 0.0},
+        headers=auth(estudiante_token),
+    )
+    assert r.status_code == 201, r.text
+    assert float(r.json()["puntuacion"]) == 5.10
+    assert "contacto visual" in (r.json()["observaciones"] or "").lower()
+
+
+async def test_atencion_alta_no_penaliza(
+    client: AsyncClient, estudiante_token: str, db_session: AsyncSession, fake_llm: None
+) -> None:
+    sesion_id = await _crear_sesion(db_session, "estu@example.com")
+    r = await client.post(
+        f"/api/v1/tribunal/sesiones/{sesion_id}/preguntas", headers=auth(estudiante_token)
+    )
+    pid = r.json()[1]["id"]
+    r = await client.post(
+        f"/api/v1/tribunal/preguntas/{pid}/respuesta",
+        json={"texto": "respuesta razonada", "atencion": 1.0},
+        headers=auth(estudiante_token),
+    )
+    assert r.status_code == 201
+    assert float(r.json()["puntuacion"]) == 8.5  # sin penalización
+
+
+class FakeTranscription:
+    async def transcribir(self, audio_url: str) -> str:
+        return "respuesta transcrita del audio"
+
+
+@pytest.fixture
+def fake_transcription() -> Iterator[None]:
+    app.dependency_overrides[get_transcription] = lambda: FakeTranscription()
+    yield
+    app.dependency_overrides.pop(get_transcription, None)
+
+
+async def test_respuesta_por_voz_se_transcribe_y_evalua(
+    client: AsyncClient,
+    estudiante_token: str,
+    db_session: AsyncSession,
+    fake_llm: None,
+    fake_transcription: None,
+) -> None:
+    # CU-16: respuesta SOLO audio (sin texto) -> el backend transcribe y evalúa ese texto.
+    sesion_id = await _crear_sesion(db_session, "estu@example.com")
+    r = await client.post(
+        f"/api/v1/tribunal/sesiones/{sesion_id}/preguntas", headers=auth(estudiante_token)
+    )
+    pid = r.json()[0]["id"]
+    r = await client.post(
+        f"/api/v1/tribunal/preguntas/{pid}/respuesta",
+        json={"audio_url": "s3://bucket/respuesta.mp3"},
+        headers=auth(estudiante_token),
+    )
+    assert r.status_code == 201, r.text
+    assert float(r.json()["puntuacion"]) == 8.5  # evaluó contenido, no cadena vacía
+    # Se persistió el texto transcrito en la respuesta.
+    resp = (
+        await db_session.execute(
+            select(RespuestaEstudiante).where(RespuestaEstudiante.pregunta_id == pid)
+        )
+    ).scalar_one()
+    assert resp.texto == "respuesta transcrita del audio"
+
+
+async def test_timeout_registra_pregunta_sin_respuesta(
+    client: AsyncClient, estudiante_token: str, db_session: AsyncSession, fake_llm: None
+) -> None:
+    # CU-16 (excepción): se agota el tiempo -> queda registrada sin respuesta y se avanza.
+    sesion_id = await _crear_sesion(db_session, "estu@example.com")
+    r = await client.post(
+        f"/api/v1/tribunal/sesiones/{sesion_id}/preguntas", headers=auth(estudiante_token)
+    )
+    pid = r.json()[0]["id"]
+    r = await client.post(
+        f"/api/v1/tribunal/preguntas/{pid}/timeout", headers=auth(estudiante_token)
+    )
+    assert r.status_code == 201, r.text
+    assert float(r.json()["puntuacion"]) == 0.0
+    assert r.json()["profundidad"] == "NINGUNA"
+    # La evaluación queda consultable (CU-17 tiene el dato).
+    r = await client.get(
+        f"/api/v1/tribunal/preguntas/{pid}/evaluacion", headers=auth(estudiante_token)
+    )
+    assert r.status_code == 200
+    # Ya registrada: no se puede responder después.
+    r = await client.post(
+        f"/api/v1/tribunal/preguntas/{pid}/respuesta",
+        json={"texto": "tarde"},
+        headers=auth(estudiante_token),
+    )
+    assert r.status_code == 409
+
+
+async def test_informe_pdf_tribunal_cu17(
+    client: AsyncClient, estudiante_token: str, db_session: AsyncSession, fake_llm: None
+) -> None:
+    # CU-17: descarga del informe de evaluación del tribunal en PDF.
+    sesion_id = await _crear_sesion(db_session, "estu@example.com")
+    r = await client.post(
+        f"/api/v1/tribunal/sesiones/{sesion_id}/preguntas", headers=auth(estudiante_token)
+    )
+    pid = r.json()[0]["id"]
+    await client.post(
+        f"/api/v1/tribunal/preguntas/{pid}/respuesta",
+        json={"texto": "respuesta razonada"},
+        headers=auth(estudiante_token),
+    )
+    r = await client.get(
+        f"/api/v1/tribunal/sesiones/{sesion_id}/informe", headers=auth(estudiante_token)
+    )
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"] == "application/pdf"
+    assert r.content[:4] == b"%PDF"
 
 
 async def test_401_sin_token(client: AsyncClient) -> None:

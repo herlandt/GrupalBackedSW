@@ -6,9 +6,10 @@ from collections.abc import Iterator
 import pytest
 from httpx import AsyncClient
 
-from app.integrations.factory import get_analysis_queue, get_storage_port
+from app.integrations.factory import get_storage_port
 from app.main import app
 from app.modules.administracion.suscripciones.dependencies import require_suscripcion_activa
+from app.modules.auditoria_documental.auditoria.router import get_encolar_analisis
 
 
 def auth(token: str) -> dict[str, str]:
@@ -20,24 +21,20 @@ class _FakeStorage:
         return f"/media/{key}"
 
 
-class _FakeQueue:
-    def __init__(self) -> None:
-        self.encolados: list[tuple[int, int]] = []
-
-    async def enqueue_analysis(self, *, documento_id: int, version_id: int) -> None:
-        self.encolados.append((documento_id, version_id))
-
-
 @pytest.fixture
-def documentos_overrides() -> Iterator[_FakeQueue]:
-    """Neutraliza storage, cola y gating de suscripción; limpia al terminar."""
-    queue = _FakeQueue()
+def documentos_overrides() -> Iterator[list[int]]:
+    """Neutraliza storage, el encolado del análisis y el gating de suscripción.
+
+    El encolador real abre su propia sesión de DB (rompería el aislamiento del test),
+    así que se sustituye por uno que solo CAPTURA los version_id encolados.
+    """
+    encolados: list[int] = []
     app.dependency_overrides[get_storage_port] = lambda: _FakeStorage()
-    app.dependency_overrides[get_analysis_queue] = lambda: queue
+    app.dependency_overrides[get_encolar_analisis] = lambda: encolados.append
     app.dependency_overrides[require_suscripcion_activa] = lambda: object()
-    yield queue
+    yield encolados
     app.dependency_overrides.pop(get_storage_port, None)
-    app.dependency_overrides.pop(get_analysis_queue, None)
+    app.dependency_overrides.pop(get_encolar_analisis, None)
     app.dependency_overrides.pop(require_suscripcion_activa, None)
 
 
@@ -57,13 +54,13 @@ async def _subir(client: AsyncClient, token: str, titulo: str = "Mi tesis") -> d
 
 
 async def test_subir_documento_crea_version_y_encola(
-    client: AsyncClient, estudiante_token: str, documentos_overrides: _FakeQueue
+    client: AsyncClient, estudiante_token: str, documentos_overrides: list[int]
 ) -> None:
     body = await _subir(client, estudiante_token)
     assert body["numero_version"] == 1
-    assert body["estado_analisis"] == "PENDIENTE"
+    assert body["estado_analisis"] == "EN_PROCESO"  # el análisis arranca solo (CU-08)
     assert body["formato"] == "PDF"
-    assert len(documentos_overrides.encolados) == 1  # se encoló el análisis
+    assert documentos_overrides == [body["id"]]  # se encoló el análisis de esa versión
 
     r = await client.get("/api/v1/documentos", headers=auth(estudiante_token))
     assert r.status_code == 200
@@ -71,7 +68,7 @@ async def test_subir_documento_crea_version_y_encola(
 
 
 async def test_subir_nueva_version_incrementa_y_encola(
-    client: AsyncClient, estudiante_token: str, documentos_overrides: _FakeQueue
+    client: AsyncClient, estudiante_token: str, documentos_overrides: list[int]
 ) -> None:
     primera = await _subir(client, estudiante_token)
     documento_id = primera["documento_id"]
@@ -83,11 +80,11 @@ async def test_subir_nueva_version_incrementa_y_encola(
     )
     assert r.status_code == 201, r.text
     assert r.json()["numero_version"] == 2
-    assert len(documentos_overrides.encolados) == 2  # se encoló de nuevo
+    assert len(documentos_overrides) == 2  # se encoló de nuevo (subida + versión)
 
 
 async def test_historial_versiones(
-    client: AsyncClient, estudiante_token: str, documentos_overrides: _FakeQueue
+    client: AsyncClient, estudiante_token: str, documentos_overrides: list[int]
 ) -> None:
     primera = await _subir(client, estudiante_token)
     documento_id = primera["documento_id"]
@@ -106,7 +103,7 @@ async def test_sin_token_devuelve_401(client: AsyncClient) -> None:
 
 
 async def test_admin_devuelve_403(
-    client: AsyncClient, admin_token: str, documentos_overrides: _FakeQueue
+    client: AsyncClient, admin_token: str, documentos_overrides: list[int]
 ) -> None:
     # Suscripción permitida por el fixture; el admin no es ESTUDIANTE -> 403.
     r = await client.get("/api/v1/documentos", headers=auth(admin_token))
@@ -127,7 +124,7 @@ async def test_sin_suscripcion_devuelve_402(
 
 
 async def test_formato_invalido_devuelve_409(
-    client: AsyncClient, estudiante_token: str, documentos_overrides: _FakeQueue
+    client: AsyncClient, estudiante_token: str, documentos_overrides: list[int]
 ) -> None:
     r = await client.post(
         "/api/v1/documentos",
@@ -139,7 +136,7 @@ async def test_formato_invalido_devuelve_409(
 
 
 async def test_documento_inexistente_devuelve_404(
-    client: AsyncClient, estudiante_token: str, documentos_overrides: _FakeQueue
+    client: AsyncClient, estudiante_token: str, documentos_overrides: list[int]
 ) -> None:
     r = await client.get(
         "/api/v1/documentos/999999/versiones", headers=auth(estudiante_token)
@@ -151,7 +148,7 @@ async def test_idor_documento_ajeno_devuelve_404(
     client: AsyncClient,
     estudiante_token: str,
     estudiante2_token: str,
-    documentos_overrides: _FakeQueue,
+    documentos_overrides: list[int],
 ) -> None:
     # estu sube un documento; estu2 NO debe poder leerlo ni versionarlo (se trata
     # como inexistente -> 404, sin revelar que pertenece a otro usuario).

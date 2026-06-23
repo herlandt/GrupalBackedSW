@@ -11,6 +11,7 @@ from __future__ import annotations
 import anyio
 
 from app.core.config import settings
+from app.integrations.analysis.etica import detectar_alertas_etica
 from app.integrations.analysis.extraction import (
     SECCIONES_ESPERADAS,
     extraer_texto,
@@ -114,6 +115,7 @@ class AwsAnalysisService:
             observaciones=_observaciones(features, texto, temas, mejoras),
             features=features,
             revision_sugerida=revision,
+            alertas_etica=detectar_alertas_etica(texto),  # CU-12: detección automática
         )
 
 

@@ -1,6 +1,7 @@
 """Lógica de negocio — submódulo auditoria (CU-10, RF-01, RF-02)."""
 
 from collections.abc import Sequence
+from typing import Any
 
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +19,35 @@ from app.modules.auditoria_documental.auditoria.repository import (
 )
 from app.modules.auditoria_documental.documentos.models import Documento, VersionDocumento
 from app.modules.auditoria_documental.documentos.repository import VersionRepository
+from app.modules.auditoria_documental.etica.service import EticaService
+
+_ORDEN_NIVEL = {NivelPreparacion.BAJO: 0, NivelPreparacion.MEDIO: 1, NivelPreparacion.ALTO: 2}
+
+
+def _comparar_versiones(
+    anterior: VersionDocumento,
+    res_anterior: ResultadoAuditoria,
+    nivel_actual: NivelPreparacion,
+    features_actual: dict[str, float],
+) -> dict[str, Any]:
+    """Reporte comparativo entre la versión actual y la anterior (CU-09 / RF-09)."""
+    ant = _ORDEN_NIVEL[res_anterior.nivel_documento]
+    act = _ORDEN_NIVEL[nivel_actual]
+    tendencia = "mejoro" if act > ant else "empeoro" if act < ant else "igual"
+    prev_feat = res_anterior.features or {}
+    deltas = {
+        clave: round(float(valor) - float(prev_feat[clave]), 4)
+        for clave, valor in (features_actual or {}).items()
+        if clave in prev_feat
+    }
+    return {
+        "version_anterior_id": anterior.id,
+        "version_anterior_numero": anterior.numero_version,
+        "nivel_anterior": res_anterior.nivel_documento.value,
+        "nivel_actual": nivel_actual.value,
+        "tendencia": tendencia,
+        "features_delta": deltas,
+    }
 
 
 async def reiniciar_analisis_huerfanos() -> int:
@@ -38,13 +68,20 @@ async def reiniciar_analisis_huerfanos() -> int:
 
 
 class AuditoriaService:
-    def __init__(self, db: AsyncSession, analysis: AnalysisServicePort) -> None:
+    def __init__(
+        self,
+        db: AsyncSession,
+        analysis: AnalysisServicePort,
+        etica: EticaService | None = None,
+    ) -> None:
         self.db = db
         self.resultados = ResultadoRepository(db)
         self.observaciones = ObservacionRepository(db)
         self.versiones = VersionRepository(db)
         self.audit = AuditService(db)
         self.analysis = analysis
+        # CU-12: si se inyecta, el motor abre alertas de ética detectadas en el análisis.
+        self.etica = etica
 
     # --- Helpers ---------------------------------------------------------
     async def _version_del_usuario(self, version_id: int, usuario: Usuario) -> VersionDocumento:
@@ -66,6 +103,17 @@ class AuditoriaService:
         if resultado is None:
             raise ResourceNotFoundError("Aún no hay resultados de auditoría para esta versión")
         obs = await self.observaciones.por_resultado(resultado.id, categoria)
+        # CU-10 (postcondición): registrar la consulta del informe en la bitácora.
+        await self.audit.log(
+            actor_id=usuario.id,
+            accion="AUDITORIA_CONSULTADA",
+            entidad="resultado_auditoria",
+            entidad_id=resultado.id,
+            metadata={
+                "version_id": version_id,
+                "categoria": categoria.value if categoria else None,
+            },
+        )
         return resultado, obs
 
     async def estado(self, version_id: int, usuario: Usuario) -> EstadoAnalisis:
@@ -144,6 +192,18 @@ class AuditoriaService:
                     ubicacion=o.ubicacion,
                 )
             )
+
+        # CU-09 / RF-09: si hay una versión anterior ya analizada, genera la comparación.
+        anterior = await self.versiones.version_anterior(
+            version.documento_id, version.numero_version
+        )
+        if anterior is not None:
+            res_anterior = await self.resultados.por_version(anterior.id)
+            if res_anterior is not None:
+                resultado.comparacion = _comparar_versiones(
+                    anterior, res_anterior, resultado.nivel_documento, dto.features
+                )
+
         version.estado_analisis = EstadoAnalisis.COMPLETADO
         await self.db.flush()
 
@@ -154,4 +214,12 @@ class AuditoriaService:
             entidad_id=resultado.id,
             metadata={"version_id": version.id, "nivel": resultado.nivel_documento.value},
         )
+
+        # CU-12: el sistema detecta automáticamente posibles incumplimientos éticos durante el
+        # análisis y abre las alertas (notificando a estudiante + admins), sin acción manual.
+        if self.etica is not None:
+            for alerta in dto.alertas_etica:
+                await self.etica.crear_alerta_si_nueva(
+                    version.id, alerta.tipo, alerta.fragmento
+                )
         return resultado

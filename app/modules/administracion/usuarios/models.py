@@ -1,9 +1,11 @@
 """Modelos ORM del submódulo Usuarios (CU-01)."""
 
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import Boolean, ForeignKey, String, text
 from sqlalchemy import Enum as SAEnum
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.enums import RolUsuario
@@ -19,6 +21,8 @@ class Usuario(Base, IdMixin, TimestampMixin):
     rol: Mapped[RolUsuario] = mapped_column(SAEnum(RolUsuario, name="rol_usuario"))
     foto_perfil_url: Mapped[str | None] = mapped_column(String(500))
     activo: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    # CU-01: preferencias del perfil (tema, idioma, notificaciones…), libres en JSON.
+    preferencias: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
 
 class TokenResetPassword(Base, IdMixin, CreatedAtMixin):

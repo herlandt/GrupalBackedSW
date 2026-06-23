@@ -5,20 +5,27 @@ from collections.abc import Sequence
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.administracion.dashboard.sources import (
+    AvanceMetricSource,
+    BiometricoMetricSource,
     CuentaMetricSource,
+    DocumentoMetricSource,
     MetricSource,
     PagosMetricSource,
+    SimulacionMetricSource,
     SuscripcionMetricSource,
 )
 
 
 def build_metric_sources(db: AsyncSession) -> Sequence[MetricSource]:
-    """Fuentes activas en Sprint 1. Sprints 2-3 añaden líneas aquí (documentos,
-    simulaciones) SIN tocar el DashboardService."""
+    """Todas las fuentes del dashboard (CU-06). El estudiante ve su progreso real
+    (documentos, simulaciones, biométrico, avance); el admin, los agregados globales.
+    Añadir una métrica = una línea más aquí, SIN tocar el DashboardService."""
     return [
         CuentaMetricSource(db),
         SuscripcionMetricSource(db),
         PagosMetricSource(db),
-        # Sprint 1.5+: descomenta para activar RF-08 detallado.
-        # AvanceMetricSource(db),
+        DocumentoMetricSource(db),
+        SimulacionMetricSource(db),
+        BiometricoMetricSource(db),
+        AvanceMetricSource(db),  # RF-08: avance formal del estudiante / progreso global admin
     ]

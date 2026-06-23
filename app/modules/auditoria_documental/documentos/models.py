@@ -4,7 +4,7 @@ from sqlalchemy import Enum as SAEnum
 from sqlalchemy import ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.enums import EstadoAnalisis, FormatoDocumento
+from app.core.enums import EstadoAnalisis, EstadoEticaTesis, FormatoDocumento
 from app.models.base import Base, CreatedAtMixin, IdMixin, TimestampMixin
 
 
@@ -13,6 +13,12 @@ class Documento(Base, IdMixin, TimestampMixin):
 
     usuario_id: Mapped[int] = mapped_column(ForeignKey("usuario.id"), index=True)
     titulo: Mapped[str] = mapped_column(String(255))
+    # CU-12: estado ético de la tesis; lo actualiza el sistema al abrir/resolver alertas.
+    estado_etico: Mapped[EstadoEticaTesis] = mapped_column(
+        SAEnum(EstadoEticaTesis, name="estado_etica_tesis"),
+        default=EstadoEticaTesis.LIMPIO,
+        server_default=EstadoEticaTesis.LIMPIO.value,
+    )
 
 
 class VersionDocumento(Base, IdMixin, CreatedAtMixin):

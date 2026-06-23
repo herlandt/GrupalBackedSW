@@ -1,5 +1,7 @@
 """Esquemas Pydantic del submódulo Usuarios (contrato de la API)."""
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.core.enums import RolUsuario
@@ -19,11 +21,13 @@ class UsuarioRead(BaseModel):
     email: EmailStr
     rol: RolUsuario
     foto_perfil_url: str | None = None
+    preferencias: dict[str, Any] | None = None
     activo: bool
 
 
 class UsuarioUpdate(BaseModel):
     nombre: str | None = Field(default=None, min_length=1, max_length=150)
+    preferencias: dict[str, Any] | None = None
 
 
 class Token(BaseModel):

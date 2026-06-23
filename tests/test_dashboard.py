@@ -54,6 +54,31 @@ async def test_dashboard_admin_agregado(client: AsyncClient, admin_token: str) -
     assert "suscripciones_activas" in body["metricas"]["suscripcion"]
 
 
+async def test_dashboard_estudiante_incluye_fuentes_academicas(
+    client: AsyncClient, estudiante_token: str
+) -> None:
+    # CU-06: el panel del estudiante incluye su progreso real (documentos, simulaciones,
+    # biométrico), no solo cuenta/suscripción/pagos.
+    r = await client.get("/api/v1/dashboard", headers=auth(estudiante_token))
+    assert r.status_code == 200
+    m = r.json()["metricas"]
+    for clave in ("documentos", "simulaciones", "biometrico", "avance"):
+        assert clave in m
+    assert m["documentos"]["total_documentos"] == 0  # estudiante nuevo, sin datos aún
+    assert m["biometrico"]["mayor_fallo"] is None
+
+
+async def test_dashboard_filtra_por_modulo(
+    client: AsyncClient, estudiante_token: str
+) -> None:
+    # CU-06 (paso 5): filtrar por módulo devuelve solo esa fuente.
+    r = await client.get(
+        "/api/v1/dashboard?modulo=simulaciones", headers=auth(estudiante_token)
+    )
+    assert r.status_code == 200
+    assert set(r.json()["metricas"].keys()) == {"simulaciones"}
+
+
 async def test_dashboard_estudiante_refleja_pago(
     client: AsyncClient,
     admin_token: str,

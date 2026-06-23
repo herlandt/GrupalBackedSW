@@ -7,6 +7,7 @@ renderer y devuelve los bytes + el nombre de archivo + el media type.
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -73,6 +74,35 @@ class ReporteService:
             xlsx_fn=lambda: xlsx.pagos_por_estudiante_excel(filas),
         )
         await self._auditar(actor.id, "REPORTE_PAGOS_ESTUDIANTE", formato)
+        return archivo
+
+    async def bitacora(
+        self,
+        actor: Usuario,
+        formato: str,
+        *,
+        desde: datetime | None = None,
+        hasta: datetime | None = None,
+    ) -> Archivo:
+        filas = await self.repo.bitacora(desde=desde, hasta=hasta)
+        archivo = self._render(
+            formato,
+            base="bitacora",
+            pdf_fn=lambda: pdf.bitacora_pdf(filas),
+            xlsx_fn=lambda: xlsx.bitacora_excel(filas),
+        )
+        await self._auditar(actor.id, "REPORTE_BITACORA", formato)
+        return archivo
+
+    async def progreso_estudiantes(self, actor: Usuario, formato: str) -> Archivo:
+        filas = await self.repo.progreso_estudiantes()
+        archivo = self._render(
+            formato,
+            base="progreso_estudiantes",
+            pdf_fn=lambda: pdf.progreso_estudiantes_pdf(filas),
+            xlsx_fn=lambda: xlsx.progreso_estudiantes_excel(filas),
+        )
+        await self._auditar(actor.id, "REPORTE_PROGRESO", formato)
         return archivo
 
     # --- Export del propio historial del estudiante (CU-04) -------------------

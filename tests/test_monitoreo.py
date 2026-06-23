@@ -79,6 +79,41 @@ async def test_detalle_estudiante_ok(
     assert r.json()["nivel_general"] in {"ALTO", "MEDIO", "BAJO"}
 
 
+async def test_detalle_incluye_simulaciones_y_versiones(
+    client: AsyncClient, admin_token: str, estudiante_token: str
+) -> None:
+    # CU-07: el detalle trae las listas de simulaciones y versiones (vacías para un alumno nuevo).
+    uid = await _id_estudiante(client, admin_token)
+    r = await client.get(f"/api/v1/monitoreo/estudiantes/{uid}", headers=auth(admin_token))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["simulaciones"] == []
+    assert body["versiones"] == []
+    assert "avances" in body
+
+
+async def test_exportar_estudiante_pdf(
+    client: AsyncClient, admin_token: str, estudiante_token: str
+) -> None:
+    # CU-07: el admin descarga el reporte del estudiante en PDF.
+    uid = await _id_estudiante(client, admin_token)
+    r = await client.get(
+        f"/api/v1/monitoreo/estudiantes/{uid}/export", headers=auth(admin_token)
+    )
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"] == "application/pdf"
+    assert r.content[:4] == b"%PDF"
+
+
+async def test_exportar_estudiante_requiere_admin(
+    client: AsyncClient, estudiante_token: str
+) -> None:
+    r = await client.get(
+        "/api/v1/monitoreo/estudiantes/1/export", headers=auth(estudiante_token)
+    )
+    assert r.status_code == 403
+
+
 async def test_registrar_y_rechazar_avance(
     client: AsyncClient, admin_token: str, estudiante_token: str
 ) -> None:

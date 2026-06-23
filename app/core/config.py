@@ -53,6 +53,14 @@ class Settings(BaseSettings):
     # Embeddings de Gemini (gratis) para la coherencia discurso↔documento: si hay GEMINI_API_KEY
     # se usa esto en vez de Titan (Bedrock), que está en cuota 0.
     gemini_embed_model: str = "gemini-embedding-001"
+    # --- Texto a voz del tribunal por voz: "stub" (dev) | "aws" (Amazon Polly, voz neural) ---
+    # Polly NO requiere activación manual; solo el permiso IAM polly:SynthesizeSpeech.
+    tts_backend: str = "stub"
+    polly_voice: str = "Lupe"  # voz neural es-US (alternativas: Mia es-MX, Lucia/Sergio es-ES)
+    polly_engine: str = "neural"
+    # --- Transcripción por lotes (respaldo del tribunal por voz, CU-16) ---
+    # "stub" (dev) | "aws" (AWS Transcribe batch sobre el audio en S3).
+    transcription_backend: str = "stub"
 
     # --- CORS (frontend web y móvil son separados) ---
     # NoDecode: evita que pydantic-settings intente parsear el valor como JSON,

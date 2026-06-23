@@ -36,7 +36,41 @@ async def test_login_credenciales_invalidas(client: AsyncClient) -> None:
     r = await client.post(
         "/api/v1/auth/login", data={"username": REGISTRO["email"], "password": "incorrecta"}
     )
-    assert r.status_code == 409
+    # CU-01: credenciales inválidas -> 401 (autenticación), no 409.
+    assert r.status_code == 401
+    assert r.headers.get("WWW-Authenticate") == "Bearer"
+
+
+async def _registrar_y_token(client: AsyncClient) -> str:
+    await client.post("/api/v1/auth/register", json=REGISTRO)
+    r = await client.post(
+        "/api/v1/auth/login",
+        data={"username": REGISTRO["email"], "password": REGISTRO["password"]},
+    )
+    return str(r.json()["access_token"])
+
+
+async def test_logout_cu01(client: AsyncClient) -> None:
+    token = await _registrar_y_token(client)
+    r = await client.post("/api/v1/auth/logout", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    # Requiere sesión: sin token, 401.
+    assert (await client.post("/api/v1/auth/logout")).status_code == 401
+
+
+async def test_editar_preferencias_cu01(client: AsyncClient) -> None:
+    token = await _registrar_y_token(client)
+    cab = {"Authorization": f"Bearer {token}"}
+    r = await client.patch(
+        "/api/v1/usuarios/me",
+        json={"preferencias": {"tema": "oscuro", "idioma": "es"}},
+        headers=cab,
+    )
+    assert r.status_code == 200
+    assert r.json()["preferencias"] == {"tema": "oscuro", "idioma": "es"}
+    # Persisten al releer el perfil.
+    r = await client.get("/api/v1/usuarios/me", headers=cab)
+    assert r.json()["preferencias"]["tema"] == "oscuro"
 
 
 async def test_me_requiere_autenticacion(client: AsyncClient) -> None:

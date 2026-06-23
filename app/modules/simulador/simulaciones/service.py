@@ -3,9 +3,9 @@
 Reglas del dominio; orquesta repositorios. No conoce HTTP.
 """
 
-from collections.abc import Sequence
 from datetime import UTC, datetime
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit.service import AuditService
@@ -16,6 +16,8 @@ from app.modules.auditoria_documental.documentos.models import Documento
 from app.modules.auditoria_documental.documentos.repository import VersionRepository
 from app.modules.simulador.simulaciones.models import SesionSimulacion
 from app.modules.simulador.simulaciones.repository import SesionSimulacionRepository
+from app.modules.simulador.simulaciones.schemas import SesionRead
+from app.modules.simulador.tribunal.models import ResultadoSimulacion
 
 
 def _now() -> datetime:
@@ -109,8 +111,28 @@ class SimulacionService:
         return sesion
 
     # --- CU-15: historial y detalle -------------------------------------
-    async def historial(self, usuario: Usuario) -> Sequence[SesionSimulacion]:
-        return await self.sesiones.por_usuario(usuario.id)
+    async def historial(self, usuario: Usuario) -> list[SesionRead]:
+        """Historial con el RESULTADO GENERAL (nivel de defensa) por sesión (CU-15)."""
+        stmt = (
+            select(SesionSimulacion, ResultadoSimulacion.nivel_defensa)
+            .outerjoin(ResultadoSimulacion, ResultadoSimulacion.sesion_id == SesionSimulacion.id)
+            .where(SesionSimulacion.usuario_id == usuario.id)
+            .order_by(SesionSimulacion.fecha_inicio.desc())
+        )
+        return [
+            SesionRead(
+                id=s.id,
+                usuario_id=s.usuario_id,
+                version_documento_id=s.version_documento_id,
+                nivel_dificultad=s.nivel_dificultad,
+                estado=s.estado,
+                nivel_defensa=nivel,
+                fecha_inicio=s.fecha_inicio,
+                fecha_fin=s.fecha_fin,
+                created_at=s.created_at,
+            )
+            for s, nivel in (await self.db.execute(stmt)).all()
+        ]
 
     async def obtener(self, sesion_id: int, usuario: Usuario) -> SesionSimulacion:
         return await self._sesion_del_usuario(sesion_id, usuario)

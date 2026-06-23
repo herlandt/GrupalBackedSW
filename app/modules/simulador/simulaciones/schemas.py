@@ -7,7 +7,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
-from app.core.enums import EstadoSesion, NivelDificultad
+from app.core.enums import EstadoSesion, NivelDificultad, NivelPreparacion
 
 
 class SesionCreate(BaseModel):
@@ -27,6 +27,8 @@ class SesionRead(BaseModel):
     version_documento_id: int
     nivel_dificultad: NivelDificultad
     estado: EstadoSesion
+    # CU-15: resultado general (nivel de defensa) de la sesión; None si aún no se evaluó.
+    nivel_defensa: NivelPreparacion | None = None
     fecha_inicio: datetime
     fecha_fin: datetime | None
     created_at: datetime

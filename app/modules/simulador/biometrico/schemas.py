@@ -46,3 +46,6 @@ class ResumenBiometrico(BaseModel):
     muletillas_total: int
     pausas_total: int
     ritmo_wpm_promedio: int | None
+    # CU-14: sugerencia accionable en vivo; el front la refresca cada 45-90 s. None = aún
+    # sin datos suficientes (el sistema espera a acumular antes de la primera sugerencia).
+    sugerencia: str | None = None

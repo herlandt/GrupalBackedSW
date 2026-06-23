@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     # Embeddings de Gemini (gratis) para la coherencia discurso↔documento: si hay GEMINI_API_KEY
     # se usa esto en vez de Titan (Bedrock), que está en cuota 0.
     gemini_embed_model: str = "gemini-embedding-001"
+    # --- DeepSeek: RESPALDO de pago del tribunal cuando se agota la cuota gratis de Gemini ---
+    # API compatible con OpenAI (chat completions). Solo genera preguntas (la evaluación sigue
+    # local). La clave va en .env / variable de entorno, NUNCA en el repo. DeepSeek NO ofrece
+    # embeddings, así que la coherencia (gemini_embeddings) no usa DeepSeek.
+    deepseek_api_key: str = ""
+    deepseek_model: str = "deepseek-chat"
     # --- Texto a voz del tribunal por voz: "stub" (dev) | "aws" (Amazon Polly, voz neural) ---
     # Polly NO requiere activación manual; solo el permiso IAM polly:SynthesizeSpeech.
     tts_backend: str = "stub"

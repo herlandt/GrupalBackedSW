@@ -24,6 +24,7 @@ import anyio
 
 from app.core.config import settings
 from app.integrations.analysis.extraction import extraer_texto, particionar, resolver_path
+from app.integrations.llm import deepseek
 from app.integrations.llm._generativo import (
     SISTEMA,
     construir_contexto,
@@ -55,9 +56,6 @@ class GeminiTribunal(DocumentoTribunal):
     def _generar_con_gemini(
         self, archivo_url: str, formato: str, nivel_dificultad: str
     ) -> list[PreguntaGeneradaDTO]:
-        if not settings.gemini_api_keys:
-            logger.warning("Tribunal Gemini: falta GEMINI_API_KEY, uso plantillas.")
-            return self._generar(archivo_url, formato, nivel_dificultad)
         try:
             texto = extraer_texto(resolver_path(archivo_url), formato)
         except Exception:  # archivo ilegible → plantillas
@@ -66,19 +64,41 @@ class GeminiTribunal(DocumentoTribunal):
         contexto = construir_contexto(secciones)
         if not contexto:  # documento sin prosa aprovechable → plantillas (genéricas)
             return self._generar(archivo_url, formato, nivel_dificultad)
+
+        # 1) Gemini (GRATIS) si hay claves; rota entre ellas ante 429.
+        if settings.gemini_api_keys:
+            try:
+                preguntas = self._preguntas_gemini(contexto, nivel_dificultad)
+                if preguntas:
+                    return self._dto(preguntas)
+            except _CuotaAgotada:
+                logger.warning(
+                    "Tribunal Gemini: se AGOTARON TODAS las claves (HTTP 429); probando DeepSeek."
+                )
+            except Exception as exc:  # red / claves inválidas / respuesta rara
+                logger.warning("Tribunal Gemini no disponible (%s); probando DeepSeek.", exc)
+        else:
+            logger.info("Tribunal: sin GEMINI_API_KEY; probando DeepSeek.")
+
+        # 2) DeepSeek (RESPALDO de pago) si hay clave.
+        preguntas = self._intentar_deepseek(contexto, nivel_dificultad)
+        if preguntas:
+            logger.info("Tribunal: preguntas generadas con DeepSeek (respaldo de Gemini).")
+            return self._dto(preguntas)
+
+        # 3) Plantillas del documento (siempre disponible).
+        return self._generar(archivo_url, formato, nivel_dificultad)
+
+    def _intentar_deepseek(self, contexto: str, nivel_dificultad: str) -> list[str]:
+        """Genera con DeepSeek; devuelve [] si no hay clave o falla (→ plantillas aguas arriba)."""
         try:
-            preguntas = self._preguntas_gemini(contexto, nivel_dificultad)
-        except _CuotaAgotada:
-            logger.warning(
-                "Tribunal Gemini: se AGOTARON TODAS las claves (HTTP 429). Agrega o renueva "
-                "claves en GEMINI_API_KEY (separadas por coma). Uso plantillas mientras tanto."
-            )
-            return self._generar(archivo_url, formato, nivel_dificultad)
-        except Exception as exc:  # red / todas las claves invalidas / respuesta rara → plantillas
-            logger.warning("Tribunal Gemini no disponible, uso plantillas: %s", exc)
-            return self._generar(archivo_url, formato, nivel_dificultad)
-        if not preguntas:
-            return self._generar(archivo_url, formato, nivel_dificultad)
+            return deepseek.generar_preguntas(contexto, n_preguntas(nivel_dificultad))
+        except deepseek.DeepSeekError as exc:
+            logger.warning("Tribunal DeepSeek no disponible: %s", exc)
+            return []
+
+    @staticmethod
+    def _dto(preguntas: list[str]) -> list[PreguntaGeneradaDTO]:
         return [PreguntaGeneradaDTO(orden=i, texto=t) for i, t in enumerate(preguntas, start=1)]
 
     def _preguntas_gemini(self, contexto: str, nivel_dificultad: str) -> list[str]:
